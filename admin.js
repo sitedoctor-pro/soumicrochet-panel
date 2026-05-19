@@ -13,7 +13,11 @@ function fmtDate(value){return value ? new Date(value).toLocaleString('fr-MA',{d
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function isMobile(){return window.matchMedia('(max-width: 720px)').matches;}
 function normalizePhone(phone){let p=String(phone||'').replace(/\s+/g,''); if(p.startsWith('0')) p='212'+p.slice(1); if(p.startsWith('+')) p=p.slice(1); return p;}
-function productImageFromOrder(order){const draft=state.analytics.find(a=>a.session_id&&a.session_id===order.session_id&&a.form_draft)?.form_draft; return draft?.selected_image || draft?.image || '';}
+function productImageFromOrder(order){
+  if(order.product_image_url) return order.product_image_url;
+  const draft=state.analytics.find(a=>a.session_id&&a.session_id===order.session_id&&a.form_draft)?.form_draft;
+  return draft?.selected_image || draft?.image || draft?.product_image_url || '';
+}
 
 async function requireSession(){
   const { data } = await client.auth.getSession();

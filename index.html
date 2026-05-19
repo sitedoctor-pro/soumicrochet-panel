@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#7a1730" />
-  <title>Admin Dashboard | Soumi Crochet</title>
+  <title>Admin CRM | Soumi Crochet</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
@@ -14,123 +14,83 @@
   <div class="dashboard-shell">
     <aside class="sidebar glass" id="sidebar">
       <div class="sidebar-brand">
-        <img src="../assets/img/logo.png" alt="Soumi Crochet" />
-        <div>
-          <strong>Soumi Crochet</strong>
-          <small>Luxury Admin</small>
-        </div>
+        <img src="../logo.png" alt="Soumi Crochet" onerror="this.src='../assets/img/logo.png'" />
+        <div><strong>Soumi Crochet</strong><small>E-commerce CRM</small></div>
       </div>
-
       <nav class="side-nav" aria-label="Dashboard navigation">
-        <button class="tab-btn active" data-tab="orders">Commandes</button>
-        <button class="tab-btn" data-tab="reviews">Avis</button>
-        <button class="tab-btn" data-tab="analytics">Analytics</button>
+        <button class="tab-btn active" data-tab="analytics">Analytics</button>
+        <button class="tab-btn" data-tab="orders">Orders</button>
+        <button class="tab-btn" data-tab="visitors">Visitors</button>
+        <button class="tab-btn" data-tab="reviews">Reviews</button>
         <button class="tab-btn" data-tab="notifications">Notifications</button>
       </nav>
-
       <button class="btn btn-secondary logout-btn" id="logoutBtn" type="button">Déconnexion</button>
     </aside>
 
     <main class="dashboard-main">
       <header class="dashboard-top glass">
-        <button class="admin-menu-toggle" id="adminMenuToggle" type="button" aria-label="Toggle menu">
-          <span></span><span></span><span></span>
-        </button>
-        <div>
-          <span class="eyebrow">LIVE CONTROL ROOM</span>
-          <h1>Tableau de bord Soumi Crochet</h1>
-        </div>
+        <button class="admin-menu-toggle" id="adminMenuToggle" type="button" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+        <div><span class="eyebrow">LIVE CONTROL ROOM</span><h1>Soumi Crochet CRM</h1></div>
         <button class="btn btn-primary" id="refreshBtn" type="button">Actualiser</button>
       </header>
 
       <section class="stats-grid" id="statsGrid">
-        <article class="stat-card glass"><span>Commandes</span><strong id="statOrders">0</strong></article>
-        <article class="stat-card glass"><span>En attente</span><strong id="statPending">0</strong></article>
-        <article class="stat-card glass"><span>Visites</span><strong id="statVisits">0</strong></article>
-        <article class="stat-card glass"><span>Paniers abandonnés</span><strong id="statAbandoned">0</strong></article>
+        <article class="stat-card glass"><span>Today's Visitors</span><strong id="statTodayVisitors">0</strong></article>
+        <article class="stat-card glass"><span>Total Revenue</span><strong id="statRevenue">0 DH</strong></article>
+        <article class="stat-card glass"><span>Orders</span><strong id="statOrders">0</strong></article>
+        <article class="stat-card glass"><span>Abandoned Carts</span><strong id="statAbandoned">0</strong></article>
       </section>
 
-      <section class="panel glass tab-panel active" id="ordersPanel">
+      <section class="panel glass tab-panel active" id="analyticsPanel">
+        <div class="panel-head"><div><span class="eyebrow">ANALYTICS</span><h2>Sales & Visitor Trends</h2></div></div>
+        <div class="analytics-grid">
+          <article class="data-card"><h3>Visits by Day</h3><canvas id="visitsChart" height="180"></canvas></article>
+          <article class="data-card"><h3>Revenue by Day</h3><canvas id="revenueChart" height="180"></canvas></article>
+        </div>
+        <div class="analytics-grid">
+          <div><h3>Recent Activity</h3><div id="activityList" class="stack-list"></div></div>
+          <div><h3>Abandoned Cart 🛒</h3><div id="abandonedList" class="stack-list"></div></div>
+        </div>
+      </section>
+
+      <section class="panel glass tab-panel" id="ordersPanel">
         <div class="panel-head">
-          <div><span class="eyebrow">ORDERS</span><h2>Commandes clients</h2></div>
-          <button class="btn btn-secondary" id="exportOrders" type="button">Export CSV</button>
+          <div><span class="eyebrow">ORDERS</span><h2>Order Management</h2></div>
+          <div class="row-actions"><button class="btn btn-secondary" id="exportOrders" type="button">Export CSV</button><button class="btn btn-secondary danger" id="clearOrders" type="button">Clear/Clean</button></div>
         </div>
         <div class="responsive-table" id="ordersTableWrap"></div>
       </section>
 
+      <section class="panel glass tab-panel" id="visitorsPanel">
+        <div class="panel-head"><div><span class="eyebrow">VISITORS</span><h2>Active & Past Users</h2></div></div>
+        <div class="stack-list" id="visitorsList"></div>
+      </section>
+
       <section class="panel glass tab-panel" id="reviewsPanel">
-        <div class="panel-head"><div><span class="eyebrow">SOCIAL PROOF</span><h2>Avis clients</h2></div></div>
+        <div class="panel-head"><div><span class="eyebrow">SOCIAL PROOF</span><h2>Customer Reviews</h2></div></div>
         <div class="responsive-table" id="reviewsTableWrap"></div>
       </section>
 
-      <section class="panel glass tab-panel" id="analyticsPanel">
-        <div class="panel-head"><div><span class="eyebrow">TRACKING</span><h2>Visiteurs & paniers abandonnés</h2></div></div>
-        <div class="analytics-grid">
-          <div>
-            <h3>Visiteurs récents</h3>
-            <div id="visitorsList" class="stack-list"></div>
-          </div>
-          <div>
-            <h3>Abandoned Cart 🛒</h3>
-            <div id="abandonedList" class="stack-list"></div>
-          </div>
-        </div>
-      </section>
-
       <section class="panel glass tab-panel" id="notificationsPanel">
-        <div class="panel-head"><div><span class="eyebrow">PUSH LOGS</span><h2>Journal notifications</h2></div></div>
+        <div class="panel-head"><div><span class="eyebrow">PUSH CRM</span><h2>Targeted Notifications</h2></div></div>
         <form class="notification-form" id="notificationLogForm">
           <label><span>Titre</span><input id="notifTitle" required /></label>
           <label><span>Message</span><input id="notifMessage" required /></label>
-          <label><span>Destinataires</span>
-            <input type="hidden" id="notifSegment" value="All Subscribers" required />
-            <button class="btn btn-secondary" type="button" id="openSegmentModalBtn">Choisir les destinataires</button>
-            <small id="selectedSegmentLabel">All Subscribers</small>
-          </label>
-          <button class="btn btn-primary" type="submit">Enregistrer le log</button>
+          <label><span>Destinataires</span><input type="hidden" id="notifSegment" value="All Subscribers" required /><button class="btn btn-secondary" type="button" id="openSegmentModalBtn">Choisir les destinataires</button><small id="selectedSegmentLabel">All Subscribers</small></label>
+          <button class="btn btn-primary" type="submit">Enregistrer / Envoyer</button>
         </form>
         <div class="responsive-table" id="notificationsTableWrap"></div>
       </section>
     </main>
   </div>
 
-  <div class="modal-overlay" id="detailModal" aria-hidden="true">
-    <div class="modal-mask"></div>
-    <article class="detail-card glass">
-      <button class="modal-close" id="closeDetail" type="button">×</button>
-      <div id="detailContent"></div>
-    </article>
-  </div>
-
-
-  <div class="modal-overlay" id="segmentModal" aria-hidden="true">
-    <div class="modal-mask"></div>
-    <article class="detail-card glass">
-      <button class="modal-close" id="closeSegmentModal" type="button">×</button>
-      <span class="eyebrow">PUSH SEGMENTATION</span>
-      <h2>Choisir les destinataires</h2>
-      <label class="segment-select-all"><input type="checkbox" id="segmentSelectAll" /> <span>Select All</span></label>
-      <div class="segment-list" id="segmentList"></div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" type="button" id="cancelSegmentSelection">Annuler</button>
-        <button class="btn btn-primary" type="button" id="confirmSegmentSelection">Confirm Selection</button>
-      </div>
-    </article>
-  </div>
+  <div class="modal-overlay" id="detailModal" aria-hidden="true"><div class="modal-mask"></div><article class="detail-card glass"><button class="modal-close" id="closeDetail" type="button">×</button><div id="detailContent"></div></article></div>
+  <div class="modal-overlay" id="segmentModal" aria-hidden="true"><div class="modal-mask"></div><article class="detail-card glass"><button class="modal-close" id="closeSegmentModal" type="button">×</button><span class="eyebrow">PUSH SEGMENTATION</span><h2>Choisir les destinataires</h2><label class="segment-select-all"><input type="checkbox" id="segmentSelectAll" /> <span>Select All</span></label><div class="segment-list" id="segmentList"></div><div class="modal-actions"><button class="btn btn-secondary" type="button" id="cancelSegmentSelection">Annuler</button><button class="btn btn-primary" type="button" id="confirmSegmentSelection">Confirm Selection</button></div></article></div>
 
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-  <script>
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(async function(OneSignal) {
-      await OneSignal.init({
-        appId: "7e6b1cf8-6a2f-44ad-ada2-f623c8046d81",
-        safari_web_id: "web.onesignal.auto.40adfb09-7751-41be-9e4d-5711eb8f35a8",
-        notifyButton: { enable: true },
-        allowLocalhostAsSecureOrigin: true
-      });
-    });
-  </script>
+  <script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:"7e6b1cf8-6a2f-44ad-ada2-f623c8046d81",safari_web_id:"web.onesignal.auto.40adfb09-7751-41be-9e4d-5711eb8f35a8",notifyButton:{enable:true},allowLocalhostAsSecureOrigin:true});});</script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="dashboard.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="admin.js"></script>
 </body>
 </html>

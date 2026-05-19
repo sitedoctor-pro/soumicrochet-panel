@@ -243,3 +243,10 @@ td{color:var(--text);font-weight:700}
   .dashboard-top{display:grid;grid-template-columns:auto 1fr;gap:10px}
   .dashboard-top .btn{grid-column:1 / -1}
 }
+
+
+/* Phase 2 CRM responsive refinements */
+.order-product-thumb{width:100%;max-width:220px;border-radius:18px;object-fit:cover;margin:8px 0 14px;box-shadow:0 14px 36px rgba(122,23,48,.16)}
+.mobile-order-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.order-detail-block{display:grid;gap:12px}.danger{border-color:rgba(150,20,40,.35)!important;color:#8b1230!important}.chart-card canvas,.data-card canvas{width:100%!important;max-height:260px}
+@media(max-width:720px){.mobile-order-card{padding:14px}.mobile-order-details{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}.row-actions{display:flex;flex-wrap:wrap;gap:8px}.row-actions .action-btn,.row-actions .btn{flex:1 1 auto}.analytics-grid{grid-template-columns:1fr!important}.panel-head{gap:12px;align-items:flex-start}.panel-head .row-actions{width:100%}}
