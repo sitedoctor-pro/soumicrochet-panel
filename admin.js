@@ -725,39 +725,128 @@ function notifyAdminNewReview(review) {
 
 async function wait(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
+let adminOneSignalInitPromise = null;
+
+async function initAdminOneSignal(){
+  if(adminOneSignalInitPromise) return adminOneSignalInitPromise;
+
+  adminOneSignalInitPromise = new Promise((resolve) => {
+    if(!('Notification' in window) || !('serviceWorker' in navigator)){
+      resolve(null);
+      return;
+    }
+
+    if(!window.isSecureContext && !['localhost','127.0.0.1'].includes(location.hostname)){
+      resolve(null);
+      return;
+    }
+
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+
+    const timer = setTimeout(() => {
+      console.warn('Admin OneSignal SDK did not become ready.');
+      resolve(null);
+    }, 18000);
+
+    try{
+      window.OneSignalDeferred.push(async function(OneSignal){
+        try{
+          if(!window.__soumiAdminOneSignalInitialized){
+            await OneSignal.init({
+              appId: window.SOUOMI_ADMIN_ONESIGNAL_APP_ID || ADMIN_ONESIGNAL_APP_ID,
+              notifyButton: { enable: false },
+              allowLocalhostAsSecureOrigin: true,
+              serviceWorkerPath: window.SOUOMI_ADMIN_ONESIGNAL_SW_PATH || '/admin/OneSignalSDKWorker.js',
+              serviceWorkerUpdaterPath: '/admin/OneSignalSDKUpdaterWorker.js',
+              serviceWorkerParam: { scope: window.SOUOMI_ADMIN_ONESIGNAL_SW_SCOPE || '/admin/' }
+            });
+            window.__soumiAdminOneSignalInitialized = true;
+          }
+          clearTimeout(timer);
+          resolve(OneSignal);
+        }catch(err){
+          console.warn('Admin OneSignal init failed:', err);
+          clearTimeout(timer);
+          resolve(null);
+        }
+      });
+    }catch(err){
+      console.warn('Admin OneSignal queue failed:', err);
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+
+  return adminOneSignalInitPromise;
+}
+
 async function requestAdminNotificationPermission() {
-  if (!('Notification' in window)) return;
+  if (!('Notification' in window)) {
+    statusText('Ce navigateur ne supporte pas les notifications.', 'error');
+    return null;
+  }
+
+  const btn = $('requestNotificationsBtn');
+  const originalText = btn?.textContent || '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Activation...';
+  }
 
   try {
-    if (Notification.permission === 'default') {
-      await Notification.requestPermission();
+    const OneSignal = await initAdminOneSignal();
+    if (!OneSignal) {
+      statusText('OneSignal Admin غير جاهز. تأكد من HTTPS و /admin/OneSignalSDKWorker.js', 'error', 6500);
+      return null;
     }
 
-    if (window.OneSignalDeferred) {
-      await new Promise((resolve) => {
-        window.OneSignalDeferred.push(async function(OneSignal){
-          try {
-            if (OneSignal?.Notifications?.isPushSupported && !OneSignal.Notifications.isPushSupported()) {
-              resolve();
-              return;
-            }
-
-            if (Notification.permission !== 'granted' && OneSignal?.Notifications?.requestPermission) {
-              await OneSignal.Notifications.requestPermission();
-            }
-
-            if (Notification.permission === 'granted' && OneSignal?.User?.PushSubscription?.optIn) {
-              await OneSignal.User.PushSubscription.optIn();
-            }
-          } catch (err) {
-            console.warn('Admin OneSignal subscribe failed:', err);
-          } finally {
-            resolve();
-          }
-        });
-      });
+    if (Notification.permission !== 'granted') {
+      if (OneSignal.Notifications?.requestPermission) {
+        await OneSignal.Notifications.requestPermission();
+      } else {
+        await Notification.requestPermission();
+      }
     }
-  } catch (_) {}
+
+    if (Notification.permission !== 'granted') {
+      statusText('Notifications refusées ou non activées.', 'error', 5200);
+      return null;
+    }
+
+    try {
+      await navigator.serviceWorker.register('/admin/OneSignalSDKWorker.js', { scope: '/admin/' });
+    } catch (err) {
+      console.warn('Manual admin worker registration failed:', err);
+    }
+
+    if (OneSignal.User?.PushSubscription?.optIn) {
+      await OneSignal.User.PushSubscription.optIn();
+    }
+
+    let subscriptionId = OneSignal.User?.PushSubscription?.id || OneSignal.User?.onesignalId || null;
+    for (let i = 0; !subscriptionId && i < 18; i += 1) {
+      await wait(650);
+      subscriptionId = OneSignal.User?.PushSubscription?.id || OneSignal.User?.onesignalId || null;
+    }
+
+    if (subscriptionId) {
+      localStorage.setItem('soumi_admin_onesignal_id', subscriptionId);
+      statusText('Alertes admin activées بنجاح.', 'ok', 4500);
+      return subscriptionId;
+    }
+
+    statusText('Permission OK ولكن OneSignal ماعطاش subscription id. راجع إعدادات الدومين ف OneSignal.', 'error', 7000);
+    return null;
+  } catch (err) {
+    console.warn('Admin notification activation failed:', err);
+    statusText('Erreur activation notifications admin.', 'error', 5200);
+    return null;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || '🔔 Activer alertes';
+    }
+  }
 }
 
 function openTrackModal(order) {
@@ -787,6 +876,25 @@ function closeTrackModal() {
 }
 
 async function sendOneSignalPush({ title, message, playerIds = null, includedSegments = null, url = 'https://soumicrochet.store/', buttonText = 'اطلب الآن', appId = WEBSITE_ONESIGNAL_APP_ID }) {
+  const subscriptionIds = Array.isArray(playerIds) ? playerIds.filter(Boolean) : [];
+
+  // Preferred production path: Supabase RPC uses pg_net server-side, so it works even when browser CORS blocks OneSignal REST.
+  try {
+    const { data, error } = await client.rpc('send_onesignal_push', {
+      p_title: title,
+      p_message: message,
+      p_subscription_ids: subscriptionIds.length ? subscriptionIds : null,
+      p_url: url || 'https://soumicrochet.store/',
+      p_button_text: buttonText || 'اطلب الآن',
+      p_app_id: appId || WEBSITE_ONESIGNAL_APP_ID
+    });
+
+    if (!error) return data || { queued: true };
+    console.warn('RPC send_onesignal_push failed, trying browser fallback:', error);
+  } catch (rpcError) {
+    console.warn('RPC send_onesignal_push unavailable, trying browser fallback:', rpcError);
+  }
+
   const payload = {
     app_id: appId,
     headings: { en: title, fr: title, ar: title },
@@ -800,8 +908,8 @@ async function sendOneSignalPush({ title, message, playerIds = null, includedSeg
     isAnyWeb: true
   };
 
-  if (Array.isArray(playerIds) && playerIds.length) {
-    payload.include_subscription_ids = playerIds;
+  if (subscriptionIds.length) {
+    payload.include_subscription_ids = subscriptionIds;
   } else {
     payload.included_segments = includedSegments || ['All'];
   }
