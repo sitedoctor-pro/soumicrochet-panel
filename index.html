@@ -1,96 +1,503 @@
 <!doctype html>
 <html lang="fr" dir="ltr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Soumi Crochet Admin Dashboard</title>
+
+  <meta name="robots" content="noindex,nofollow" />
   <meta name="theme-color" content="#7a1730" />
-  <title>Admin CRM | Soumi Crochet</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="admin.css" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="./admin.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function (OneSignal) {
+      await OneSignal.init({
+        appId: "7e6b1cf8-6a2f-44ad-ada2-f623c8046d81",
+        safari_web_id: "web.onesignal.auto.40adfb09-7751-41be-9e4d-5711eb8f35a8",
+        notifyButton: {
+          enable: false
+        }
+      });
+    });
+  </script>
 </head>
+
 <body>
-  <div class="dashboard-shell">
-    <aside class="sidebar glass" id="sidebar">
+  <div class="admin-shell">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-brand">
-        <img src="../logo.png" alt="Soumi Crochet" onerror="this.src='../assets/img/logo.png'" />
-        <div><strong>Soumi Crochet</strong><small>E-commerce CRM</small></div>
+        <img src="./logo.png" alt="Soumi Crochet Logo" />
+        <div>
+          <strong>Soumi Crochet</strong>
+          <span>Admin CRM</span>
+        </div>
       </div>
-      <nav class="side-nav" aria-label="Dashboard navigation">
-        <button class="tab-btn active" data-tab="analytics">Analytics</button>
-        <button class="tab-btn" data-tab="orders">Orders</button>
-        <button class="tab-btn" data-tab="visitors">Visitors</button>
-        <button class="tab-btn" data-tab="reviews">Reviews</button>
-        <button class="tab-btn" data-tab="notifications">Notifications</button>
+
+      <nav class="sidebar-nav" aria-label="Admin navigation">
+        <button class="nav-tab active" type="button" data-tab="analytics">
+          <span>📊</span>
+          <strong>Analytics</strong>
+        </button>
+
+        <button class="nav-tab" type="button" data-tab="orders">
+          <span>👜</span>
+          <strong>Orders</strong>
+        </button>
+
+        <button class="nav-tab" type="button" data-tab="visitors">
+          <span>👥</span>
+          <strong>Visitors</strong>
+        </button>
+
+        <button class="nav-tab" type="button" data-tab="reviews">
+          <span>⭐</span>
+          <strong>Reviews</strong>
+        </button>
+
+        <button class="nav-tab" type="button" data-tab="notifications">
+          <span>🔔</span>
+          <strong>Notifications</strong>
+        </button>
       </nav>
-      <button class="btn btn-secondary logout-btn" id="logoutBtn" type="button">Déconnexion</button>
+
+      <div class="sidebar-footer">
+        <button class="btn btn-light" type="button" id="refreshBtn">
+          ↻ Actualiser
+        </button>
+
+        <button class="btn btn-danger" type="button" id="logoutBtn">
+          Déconnexion
+        </button>
+      </div>
     </aside>
 
-    <main class="dashboard-main">
-      <header class="dashboard-top glass">
-        <button class="admin-menu-toggle" id="adminMenuToggle" type="button" aria-label="Toggle menu"><span></span><span></span><span></span></button>
-        <div><span class="eyebrow">LIVE CONTROL ROOM</span><h1>Soumi Crochet CRM</h1></div>
-        <button class="btn btn-primary" id="refreshBtn" type="button">Actualiser</button>
+    <main class="main-panel">
+      <header class="admin-header">
+        <button class="menu-toggle" type="button" id="adminMenuToggle" aria-label="Open menu">
+          ☰
+        </button>
+
+        <div>
+          <span class="eyebrow">Dashboard</span>
+          <h1 id="pageTitle">Analytics</h1>
+        </div>
+
+        <div class="header-actions">
+          <button class="btn btn-light" type="button" id="requestNotificationsBtn">
+            🔔 Activer alertes
+          </button>
+
+          <button class="btn btn-primary" type="button" id="manualRefreshBtn">
+            Refresh
+          </button>
+        </div>
       </header>
 
-      <section class="stats-grid" id="statsGrid">
-        <article class="stat-card glass"><span>Today's Visitors</span><strong id="statTodayVisitors">0</strong></article>
-        <article class="stat-card glass"><span>Total Revenue</span><strong id="statRevenue">0 DH</strong></article>
-        <article class="stat-card glass"><span>Orders</span><strong id="statOrders">0</strong></article>
-        <article class="stat-card glass"><span>Abandoned Carts</span><strong id="statAbandoned">0</strong></article>
+      <section class="stats-grid">
+        <article class="stat-card">
+          <span>Total Orders</span>
+          <strong id="statOrders">0</strong>
+        </article>
+
+        <article class="stat-card">
+          <span>Revenue Delivered</span>
+          <strong id="statRevenue">0 DH</strong>
+        </article>
+
+        <article class="stat-card">
+          <span>Today Visitors</span>
+          <strong id="statVisitors">0</strong>
+        </article>
+
+        <article class="stat-card">
+          <span>Page Views</span>
+          <strong id="statPageViews">0</strong>
+        </article>
+
+        <article class="stat-card">
+          <span>Pending Orders</span>
+          <strong id="statPending">0</strong>
+        </article>
+
+        <article class="stat-card">
+          <span>Subscribers</span>
+          <strong id="statSubscribers">0</strong>
+        </article>
       </section>
 
-      <section class="panel glass tab-panel active" id="analyticsPanel">
-        <div class="panel-head"><div><span class="eyebrow">ANALYTICS</span><h2>Sales & Visitor Trends</h2></div></div>
-        <div class="analytics-grid">
-          <article class="data-card"><h3>Visits by Day</h3><canvas id="visitsChart" height="180"></canvas></article>
-          <article class="data-card"><h3>Revenue by Day</h3><canvas id="revenueChart" height="180"></canvas></article>
+      <section class="tab-panel active" id="tab-analytics">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Live Analytics</span>
+              <h2>Performance en temps réel</h2>
+            </div>
+
+            <button
+              class="btn btn-danger"
+              type="button"
+              data-clean-table="analytics"
+            >
+              Nettoyer
+            </button>
+          </div>
+
+          <div class="chart-wrap">
+            <canvas id="analyticsChart"></canvas>
+          </div>
         </div>
-        <div class="analytics-grid">
-          <div><h3>Recent Activity</h3><div id="activityList" class="stack-list"></div></div>
-          <div><h3>Abandoned Cart 🛒</h3><div id="abandonedList" class="stack-list"></div></div>
+
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Activity</span>
+              <h2>Derniers événements</h2>
+            </div>
+          </div>
+
+          <div class="responsive-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Visitor</th>
+                  <th>IP</th>
+                  <th>City</th>
+                  <th>Page</th>
+                  <th>Last Seen</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="analyticsTableBody">
+                <tr>
+                  <td colspan="6">Chargement...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <section class="panel glass tab-panel" id="ordersPanel">
-        <div class="panel-head">
-          <div><span class="eyebrow">ORDERS</span><h2>Order Management</h2></div>
-          <div class="row-actions"><button class="btn btn-secondary" id="exportOrders" type="button">Export CSV</button><button class="btn btn-secondary danger" id="clearOrders" type="button">Clear/Clean</button></div>
+      <section class="tab-panel" id="tab-orders">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Orders</span>
+              <h2>Gestion des commandes</h2>
+              <p>Sur mobile, chaque commande affiche seulement le nom et la ville. Cliquez sur détails pour voir tout.</p>
+            </div>
+
+            <button
+              class="btn btn-danger"
+              type="button"
+              data-clean-table="orders"
+            >
+              Nettoyer
+            </button>
+          </div>
+
+          <div class="toolbar-row">
+            <button class="btn btn-light" type="button" id="exportOrdersBtn">
+              Export CSV
+            </button>
+
+            <button class="btn btn-light" type="button" id="clearPendingOrdersBtn">
+              Clear pending
+            </button>
+          </div>
+
+          <div class="orders-list" id="ordersList">
+            <p class="muted">Chargement des commandes...</p>
+          </div>
         </div>
-        <div class="responsive-table" id="ordersTableWrap"></div>
       </section>
 
-      <section class="panel glass tab-panel" id="visitorsPanel">
-        <div class="panel-head"><div><span class="eyebrow">VISITORS</span><h2>Active & Past Users</h2></div></div>
-        <div class="stack-list" id="visitorsList"></div>
+      <section class="tab-panel" id="tab-visitors">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">CRM</span>
+              <h2>Visitors</h2>
+              <p>Suivi des visiteurs, activité, page views et notifications ciblées.</p>
+            </div>
+
+            <button
+              class="btn btn-danger"
+              type="button"
+              data-clean-table="analytics"
+            >
+              Nettoyer
+            </button>
+          </div>
+
+          <div class="visitors-list" id="visitorsList">
+            <p class="muted">Chargement des visiteurs...</p>
+          </div>
+        </div>
       </section>
 
-      <section class="panel glass tab-panel" id="reviewsPanel">
-        <div class="panel-head"><div><span class="eyebrow">SOCIAL PROOF</span><h2>Customer Reviews</h2></div></div>
-        <div class="responsive-table" id="reviewsTableWrap"></div>
+      <section class="tab-panel" id="tab-reviews">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Reviews</span>
+              <h2>Avis clientes</h2>
+              <p>Approuvez ou supprimez les avis envoyés depuis le site.</p>
+            </div>
+
+            <button
+              class="btn btn-danger"
+              type="button"
+              data-clean-table="reviews"
+            >
+              Nettoyer
+            </button>
+          </div>
+
+          <div class="reviews-admin-list" id="reviewsList">
+            <p class="muted">Chargement des avis...</p>
+          </div>
+        </div>
       </section>
 
-      <section class="panel glass tab-panel" id="notificationsPanel">
-        <div class="panel-head"><div><span class="eyebrow">PUSH CRM</span><h2>Targeted Notifications</h2></div></div>
-        <form class="notification-form" id="notificationLogForm">
-          <label><span>Titre</span><input id="notifTitle" required /></label>
-          <label><span>Message</span><input id="notifMessage" required /></label>
-          <label><span>Destinataires</span><input type="hidden" id="notifSegment" value="All Subscribers" required /><button class="btn btn-secondary" type="button" id="openSegmentModalBtn">Choisir les destinataires</button><small id="selectedSegmentLabel">All Subscribers</small></label>
-          <button class="btn btn-primary" type="submit">Enregistrer / Envoyer</button>
-        </form>
-        <div class="responsive-table" id="notificationsTableWrap"></div>
+      <section class="tab-panel" id="tab-notifications">
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Push CRM</span>
+              <h2>Notifications ciblées</h2>
+              <p>Envoyez une notification à tous les abonnés ou à une sélection précise.</p>
+            </div>
+
+            <button
+              class="btn btn-danger"
+              type="button"
+              data-clean-table="notification_logs"
+            >
+              Nettoyer
+            </button>
+          </div>
+
+          <form class="admin-form" id="notificationForm">
+            <label>
+              <span>Titre</span>
+              <input
+                type="text"
+                id="notificationTitle"
+                name="title"
+                placeholder="Ex: Nouvelle collection disponible"
+                required
+              />
+            </label>
+
+            <label>
+              <span>Message</span>
+              <textarea
+                id="notificationMessage"
+                name="message"
+                rows="4"
+                placeholder="Votre message..."
+                required
+              ></textarea>
+            </label>
+
+            <label>
+              <span>Lien du bouton CTA</span>
+              <input
+                type="url"
+                id="notificationUrl"
+                name="url"
+                placeholder="https://soumicrochet.store/"
+                value="https://soumicrochet.store/"
+              />
+            </label>
+
+            <label>
+              <span>Texte du bouton CTA</span>
+              <input
+                type="text"
+                id="notificationButtonText"
+                name="button_text"
+                placeholder="اطلب الآن"
+                value="اطلب الآن"
+              />
+            </label>
+
+            <div class="segment-box">
+              <input type="hidden" id="selectedSegmentIds" name="target_segment" value="" />
+
+              <button
+                class="btn btn-light"
+                type="button"
+                id="openSegmentModalBtn"
+              >
+                Choisir les destinataires
+              </button>
+
+              <small id="selectedSegmentLabel">Broadcast: All</small>
+            </div>
+
+            <button class="btn btn-primary" type="submit">
+              Envoyer notification
+            </button>
+
+            <p id="notificationStatus" aria-live="polite"></p>
+          </form>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Historique</span>
+              <h2>Notification logs</h2>
+            </div>
+          </div>
+
+          <div class="logs-list" id="notificationLogsList">
+            <p class="muted">Chargement...</p>
+          </div>
+        </div>
       </section>
     </main>
   </div>
 
-  <div class="modal-overlay" id="detailModal" aria-hidden="true"><div class="modal-mask"></div><article class="detail-card glass"><button class="modal-close" id="closeDetail" type="button">×</button><div id="detailContent"></div></article></div>
-  <div class="modal-overlay" id="segmentModal" aria-hidden="true"><div class="modal-mask"></div><article class="detail-card glass"><button class="modal-close" id="closeSegmentModal" type="button">×</button><span class="eyebrow">PUSH SEGMENTATION</span><h2>Choisir les destinataires</h2><label class="segment-select-all"><input type="checkbox" id="segmentSelectAll" /> <span>Select All</span></label><div class="segment-list" id="segmentList"></div><div class="modal-actions"><button class="btn btn-secondary" type="button" id="cancelSegmentSelection">Annuler</button><button class="btn btn-primary" type="button" id="confirmSegmentSelection">Confirm Selection</button></div></article></div>
+  <div class="modal" id="orderModal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-order-modal></div>
 
-  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-  <script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:"7e6b1cf8-6a2f-44ad-ada2-f623c8046d81",safari_web_id:"web.onesignal.auto.40adfb09-7751-41be-9e4d-5711eb8f35a8",notifyButton:{enable:true},allowLocalhostAsSecureOrigin:true});});</script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="admin.js"></script>
+    <div class="modal-panel">
+      <button class="modal-close" type="button" data-close-order-modal aria-label="Close">
+        ×
+      </button>
+
+      <div class="section-head compact">
+        <span class="eyebrow">Order Details</span>
+        <h2>Détails de la commande</h2>
+      </div>
+
+      <div id="orderModalContent">
+        <p class="muted">Aucune commande sélectionnée.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="visitorModal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-visitor-modal></div>
+
+    <div class="modal-panel">
+      <button class="modal-close" type="button" data-close-visitor-modal aria-label="Close">
+        ×
+      </button>
+
+      <div class="section-head compact">
+        <span class="eyebrow">Visitor Details</span>
+        <h2>Détails du visiteur</h2>
+      </div>
+
+      <div id="visitorModalContent">
+        <p class="muted">Aucun visiteur sélectionné.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="segmentModal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-segment-modal></div>
+
+    <div class="modal-panel">
+      <button class="modal-close" type="button" data-close-segment-modal aria-label="Close">
+        ×
+      </button>
+
+      <div class="section-head compact">
+        <span class="eyebrow">Segmentation</span>
+        <h2>Choisir les destinataires</h2>
+        <p>Sélectionnez les appareils qui recevront la notification.</p>
+      </div>
+
+      <label class="segment-row segment-all">
+        <input type="checkbox" id="segmentSelectAll" />
+        <span>
+          <strong>Select All</strong>
+          <small>Envoyer à tous les abonnés affichés</small>
+        </span>
+      </label>
+
+      <div class="segment-list" id="segmentList">
+        <p class="muted">Chargement des abonnés...</p>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-primary" type="button" id="confirmSegmentSelection">
+          Confirmer la sélection
+        </button>
+
+        <button class="btn btn-light" type="button" data-close-segment-modal>
+          Annuler
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="trackModal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-track-modal></div>
+
+    <div class="modal-panel">
+      <button class="modal-close" type="button" data-close-track-modal aria-label="Close">
+        ×
+      </button>
+
+      <div class="section-head compact">
+        <span class="eyebrow">Order Tracking Push</span>
+        <h2>Envoyer une notification de livraison</h2>
+        <p>Notification ciblée uniquement vers cette cliente.</p>
+      </div>
+
+      <form id="trackPushForm" class="admin-form">
+        <input type="hidden" id="trackOneSignalUserId" name="onesignal_user_id" />
+        <input type="hidden" id="trackOrderId" name="order_id" />
+
+        <label>
+          <span>Title</span>
+          <input id="trackTitle" name="title" type="text" required />
+        </label>
+
+        <label>
+          <span>Message</span>
+          <textarea id="trackMessage" name="message" rows="4" required></textarea>
+        </label>
+
+        <label>
+          <span>Lien du bouton CTA</span>
+          <input id="trackUrl" name="url" type="url" value="https://wa.me/212662711995?text=%D8%B4%D9%83%D8%B1%D8%A7%20soumicrochet%20%D8%B9%D9%84%D9%89%20%D8%A7%D9%87%D8%AA%D9%85%D8%A7%D9%85%D9%83%D9%85%20%D8%B1%D8%A7%D9%86%D9%8A%20%D9%83%D9%86%D8%AA%D8%B3%D9%86%D9%89%20%D8%A7%D9%84%D8%B7%D9%84%D8%A8%20%D8%A8%D9%81%D8%A7%D8%B1%D8%BA%20%D8%A7%D9%84%D8%B5%D8%A8%D8%B1" required />
+        </label>
+
+        <label>
+          <span>Texte du bouton CTA</span>
+          <input id="trackButtonText" name="button_text" type="text" value="شكراً Soumi Crochet" required />
+        </label>
+
+        <button class="btn btn-primary" type="submit">
+          🚚 Envoyer l’alerte
+        </button>
+
+        <p id="trackPushStatus" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
+  <audio id="newOrderAudio" src="./notification.mp3" preload="auto"></audio>
+
+  <script src="./admin.js"></script>
 </body>
 </html>

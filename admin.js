@@ -1,160 +1,1051 @@
-const $ = (id) => document.getElementById(id);
 const SUPABASE_URL = 'https://axgcycsojorwztwlfprg.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_1YuKU9O3wuH1Zbikx_OonQ_ayCIjmSR';
+const ONESIGNAL_APP_ID = 'b0ca17c7-75cb-49bb-bfbd-936677a81519';
+const ONESIGNAL_REST_API_KEY = 'os_v2_app_mvsrfcqu7zdmhpuhorop3efsmrqpwmgrm4xurl4b3zmllikl4drp4r7vv4ra7gpsey4iivgzaxi6arqs2ige4eaquuy3ajkwg735ioq';
+
 const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (id) => document.getElementById(id);
+const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-const state = { orders:[], reviews:[], analytics:[], visitors:[], subscribers:[], notifications:[] };
-let visitsChart = null;
-let revenueChart = null;
+const state = {
+  orders: [],
+  reviews: [],
+  visitors: [],
+  analytics: [],
+  subscribers: [],
+  logs: [],
+  chart: null,
+  products: [],
+  realtimeReady: false,
+  pollTimer: null
+};
 
-function escapeHTML(value){return String(value ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
-function money(value){return `${Number(value||0).toLocaleString('fr-MA')} DH`;}
-function fmtDate(value){return value ? new Date(value).toLocaleString('fr-MA',{dateStyle:'short',timeStyle:'short'}) : '—';}
-function todayISO(){return new Date().toISOString().slice(0,10);}
-function isMobile(){return window.matchMedia('(max-width: 720px)').matches;}
-function normalizePhone(phone){let p=String(phone||'').replace(/\s+/g,''); if(p.startsWith('0')) p='212'+p.slice(1); if(p.startsWith('+')) p=p.slice(1); return p;}
-function productImageFromOrder(order){
-  if(order.product_image_url) return order.product_image_url;
-  const draft=state.analytics.find(a=>a.session_id&&a.session_id===order.session_id&&a.form_draft)?.form_draft;
-  return draft?.selected_image || draft?.image || draft?.product_image_url || '';
+function safeText(value = '') {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
-async function requireSession(){
-  const { data } = await client.auth.getSession();
-  if(!data.session){ window.location.href='login.html'; return null; }
-  return data.session;
-}
-async function loadOrders(){const {data,error}=await client.from('orders').select('*').order('created_at',{ascending:false}); if(error) throw error; state.orders=data||[]; renderOrders(); renderStats(); renderCharts();}
-async function loadReviews(){const {data,error}=await client.from('reviews').select('*').order('created_at',{ascending:false}); if(error) throw error; state.reviews=data||[]; renderReviews();}
-async function loadAnalytics(){const {data,error}=await client.from('analytics').select('*').order('created_at',{ascending:false}).limit(1500); if(error) throw error; state.analytics=data||[]; renderAnalytics(); renderStats(); renderCharts();}
-async function loadVisitors(){
-  const {data,error}=await client.from('visitors').select('*').order('last_seen',{ascending:false}).limit(1000);
-  if(error){ console.warn('visitors table unavailable; falling back to analytics', error.message); state.visitors=[]; }
-  else state.visitors=data||[];
-  renderVisitors(); renderStats();
-}
-async function loadSubscribers(){const {data,error}=await client.from('subscribers').select('*').order('created_at',{ascending:false}).limit(1000); if(error) throw error; state.subscribers=data||[];}
-async function loadNotifications(){const {data,error}=await client.from('notification_logs').select('*').order('sent_at',{ascending:false}).limit(500); if(error) throw error; state.notifications=data||[]; renderNotifications();}
-async function loadAll(){try{await Promise.all([loadOrders(),loadReviews(),loadAnalytics(),loadVisitors(),loadSubscribers(),loadNotifications()]);}catch(err){console.error(err); alert(err.message || 'Erreur chargement dashboard');}}
-
-function showTab(tab){
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`${tab}Panel`));
-  $('sidebar')?.classList.remove('show');
-}
-
-function statusOptions(current){
-  const statuses=['pending','confirmed','processing','shipped','delivered','cancelled'];
-  return `<select data-status-select>${statuses.map(s=>`<option value="${s}" ${s===current?'selected':''}>${s}</option>`).join('')}</select>`;
-}
-
-function renderStats(){
-  const today=todayISO();
-  const todaysVisitors = new Set([
-    ...state.analytics.filter(a=>String(a.created_at||'').slice(0,10)===today && a.event_type==='visit').map(a=>a.session_id),
-    ...state.visitors.filter(v=>String(v.last_seen||v.created_at||'').slice(0,10)===today).map(v=>v.session_id)
-  ]).size;
-  const revenue = state.orders.filter(o=>!['cancelled'].includes(o.status)).reduce((sum,o)=>sum+Number(o.price||0),0);
-  const abandoned = getAbandonedCarts().length;
-  if($('statTodayVisitors')) $('statTodayVisitors').textContent=todaysVisitors;
-  if($('statRevenue')) $('statRevenue').textContent=money(revenue);
-  if($('statOrders')) $('statOrders').textContent=state.orders.length;
-  if($('statAbandoned')) $('statAbandoned').textContent=abandoned;
-}
-
-function renderOrders(){
-  const wrap=$('ordersTableWrap'); if(!wrap) return;
-  if(!state.orders.length){wrap.innerHTML='<div class="data-card"><strong>Aucune commande</strong><small>Les nouvelles commandes apparaîtront ici.</small></div>'; return;}
-  if(isMobile()){
-    wrap.innerHTML=state.orders.map(o=>`<article class="data-card mobile-order-card" data-order-id="${o.id}">
-      <div class="mobile-order-summary"><strong>${escapeHTML(o.customer_name)}</strong><button class="action-btn" data-expand-order="${o.id}">Expand/View Details</button></div>
-      <div class="mobile-order-details" id="mobile-order-${o.id}" hidden>
-        ${renderOrderDetailsHTML(o)}
-        <div class="row-actions"><button class="action-btn" data-confirm-contact="${o.id}">Confirm & Contact</button><a class="action-btn" href="tel:${escapeHTML(o.phone)}">Call</a><button class="action-btn danger" data-delete-order="${o.id}">Delete</button></div>
-      </div>
-    </article>`).join('');
-  }else{
-    wrap.innerHTML=`<table><thead><tr><th>Date</th><th>Client</th><th>Produit</th><th>Prix</th><th>Ville</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.orders.map(o=>`<tr data-order-id="${o.id}">
-      <td data-label="Date">${fmtDate(o.created_at)}</td><td data-label="Client"><strong>${escapeHTML(o.customer_name)}</strong><br><small>${escapeHTML(o.phone)}</small></td>
-      <td data-label="Produit">${escapeHTML(o.product_name)}<br><small>${escapeHTML(o.product_id)}</small></td><td data-label="Prix">${money(o.price)}</td><td data-label="Ville">${escapeHTML(o.city)}</td><td data-label="Status">${statusOptions(o.status)}</td>
-      <td data-label="Actions"><div class="row-actions"><button class="action-btn" data-view-order="${o.id}">View Details</button><button class="action-btn" data-confirm-contact="${o.id}">Confirm & Contact</button><button class="action-btn danger" data-delete-order="${o.id}">Delete</button></div></td>
-    </tr>`).join('')}</tbody></table>`;
+function fmtDate(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString('fr-FR');
+  } catch (_) {
+    return String(value);
   }
-  bindOrderActions(wrap);
 }
 
-function renderOrderDetailsHTML(o){
-  const img=productImageFromOrder(o);
-  return `<div class="order-detail-block">${img?`<img class="order-product-thumb" src="${escapeHTML(img)}" alt="${escapeHTML(o.product_name)}" />`:''}<dl class="detail-grid">
-    <dt>Phone</dt><dd><a href="tel:${escapeHTML(o.phone)}">${escapeHTML(o.phone)}</a></dd><dt>City</dt><dd>${escapeHTML(o.city)}</dd><dt>Address</dt><dd>${escapeHTML(o.address)}</dd><dt>Product</dt><dd>${escapeHTML(o.product_name)}</dd><dt>Price</dt><dd>${money(o.price)}</dd><dt>Status</dt><dd>${escapeHTML(o.status)}</dd><dt>OneSignal</dt><dd>${escapeHTML(o.onesignal_user_id||'—')}</dd></dl></div>`;
-}
-function bindOrderActions(scope){
-  scope.querySelectorAll('[data-status-select]').forEach(s=>s.addEventListener('change',async e=>{const id=e.target.closest('[data-order-id]').dataset.orderId; const {error}=await client.from('orders').update({status:e.target.value}).eq('id',id); if(error) alert(error.message); await loadOrders();}));
-  scope.querySelectorAll('[data-view-order]').forEach(b=>b.addEventListener('click',()=>viewOrder(b.dataset.viewOrder)));
-  scope.querySelectorAll('[data-expand-order]').forEach(b=>b.addEventListener('click',()=>{const box=$(`mobile-order-${b.dataset.expandOrder}`); if(box) box.hidden=!box.hidden;}));
-  scope.querySelectorAll('[data-delete-order]').forEach(b=>b.addEventListener('click',()=>deleteOrder(b.dataset.deleteOrder)));
-  scope.querySelectorAll('[data-confirm-contact]').forEach(b=>b.addEventListener('click',()=>confirmAndContact(b.dataset.confirmContact)));
-}
-function viewOrder(id){const o=state.orders.find(x=>x.id===id); if(!o) return; $('detailContent').innerHTML=`<span class="eyebrow">ORDER DETAILS</span><h2>${escapeHTML(o.product_name)}</h2>${renderOrderDetailsHTML(o)}<div class="row-actions"><button class="action-btn" data-confirm-contact="${o.id}">Confirm & Contact</button><button class="action-btn danger" data-delete-order="${o.id}">Delete</button></div>`; $('detailModal').classList.add('show'); $('detailModal').setAttribute('aria-hidden','false'); bindOrderActions($('detailContent'));}
-async function deleteOrder(id){if(!confirm('Supprimer cette commande ?')) return; const {error}=await client.from('orders').delete().eq('id',id); if(error){alert(error.message);return;} await loadOrders();}
-async function clearOrders(){if(!confirm('Supprimer les commandes pending/cancelled de plus de 7 jours ?')) return; const cutoff=new Date(Date.now()-7*24*3600*1000).toISOString(); const {error}=await client.from('orders').delete().in('status',['pending','cancelled']).lt('created_at',cutoff); if(error){alert(error.message);return;} await loadOrders();}
-async function confirmAndContact(id){
-  const o=state.orders.find(x=>x.id===id); if(!o) return;
-  await client.from('orders').update({status:'confirmed'}).eq('id',id);
-  if(o.onesignal_user_id) await sendTargetedPush(o.onesignal_user_id,'Soumi Crochet','Votre commande a été confirmée. Nous vous contacterons pour la livraison.');
-  if(o.phone){const msg=encodeURIComponent(`سلام ${o.customer_name || ''}، تم تأكيد طلبك من Soumi Crochet: ${o.product_name}. بغينا ننسقو معاك التوصيل.`); window.open(`https://wa.me/${normalizePhone(o.phone)}?text=${msg}`,'_blank','noopener');}
-  await loadOrders();
+function money(value) {
+  return `${Number(value || 0).toLocaleString('fr-FR')} DH`;
 }
 
-async function sendTargetedPush(playerIds,title,message){
-  const target = Array.isArray(playerIds) ? playerIds.join(',') : String(playerIds||'');
-  await client.from('notification_logs').insert({title,message,target_segment:target});
-  try{ await client.functions.invoke('send-push', { body:{ player_ids:target.split(',').filter(Boolean), title, message } }); }catch(err){ console.warn('Push function not configured; notification log saved only.', err); }
+function normalizePhone(phone = '') {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('212')) return digits;
+  if (digits.startsWith('0')) return `212${digits.slice(1)}`;
+  return digits;
 }
 
-function renderReviews(){
-  const wrap=$('reviewsTableWrap'); if(!wrap) return;
-  wrap.innerHTML=state.reviews.length?`<table><thead><tr><th>Date</th><th>Client</th><th>Rating</th><th>Avis</th><th>Publié</th><th>Actions</th></tr></thead><tbody>${state.reviews.map(r=>`<tr data-review-id="${r.id}"><td>${fmtDate(r.created_at)}</td><td><strong>${escapeHTML(r.reviewer_name)}</strong><br><small>${escapeHTML(r.phone)} · ${escapeHTML(r.city)}</small></td><td>${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</td><td>${escapeHTML(r.review_text)}</td><td><span class="badge">${r.is_published?'Oui':'Non'}</span></td><td><div class="row-actions"><button class="action-btn" data-approve-review="${r.id}">${r.is_published?'Masquer':'Approuver'}</button><button class="action-btn danger" data-delete-review="${r.id}">Delete</button></div></td></tr>`).join('')}</tbody></table>`:'<div class="data-card"><strong>Aucun avis</strong></div>';
-  wrap.querySelectorAll('[data-approve-review]').forEach(b=>b.addEventListener('click',async()=>{const r=state.reviews.find(x=>x.id===b.dataset.approveReview); const {error}=await client.from('reviews').update({is_published:!r.is_published}).eq('id',r.id); if(error) alert(error.message); await loadReviews();}));
-  wrap.querySelectorAll('[data-delete-review]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Supprimer cet avis ?')) return; const {error}=await client.from('reviews').delete().eq('id',b.dataset.deleteReview); if(error) alert(error.message); await loadReviews();}));
+function normalizeActivityHistory(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  return [];
 }
-function getAbandonedCarts(){const ordered=new Set(state.orders.map(o=>o.session_id).filter(Boolean)); const drafts=new Map(); state.analytics.filter(a=>a.form_draft&&a.session_id&&!ordered.has(a.session_id)).forEach(a=>{if(!drafts.has(a.session_id)) drafts.set(a.session_id,a);}); return [...drafts.values()];}
-function renderAnalytics(){
-  const activity=state.analytics.slice(0,20); const abandoned=getAbandonedCarts();
-  if($('activityList')) $('activityList').innerHTML=activity.length?activity.map(a=>`<article class="data-card"><strong>${escapeHTML(a.event_type)} · ${escapeHTML(a.city||'Unknown')}</strong><small>${fmtDate(a.created_at)} · ${escapeHTML(a.session_id)}</small><small>${escapeHTML(a.page_url)}</small></article>`).join(''):'<div class="data-card"><strong>Aucune activité</strong></div>';
-  if($('abandonedList')) $('abandonedList').innerHTML=abandoned.length?abandoned.map(a=>{const d=a.form_draft||{};return `<article class="data-card"><strong>${escapeHTML(d.customer_name||'Client sans nom')} · ${escapeHTML(d.phone||'phone pending')}</strong><small>${escapeHTML(d.product_name||d.product_id||'—')} · ${escapeHTML(d.price||'—')} DH</small><small>${escapeHTML(d.city||a.city||'—')} · ${fmtDate(a.created_at)}</small></article>`;}).join(''):'<div class="data-card"><strong>Aucun panier abandonné</strong></div>';
+
+function normalizeUrl(url = '') {
+  const value = String(url || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('//')) return `https:${value}`;
+  if (value.startsWith('assets/')) return `../${value}`;
+  if (value.startsWith('/')) return `..${value}`;
+  if (value.includes('soumicrochet.store')) return `https://${value.replace(/^\/+/, '')}`;
+  return value;
 }
-function renderVisitors(){
-  const list=$('visitorsList'); if(!list) return;
-  const source=state.visitors.length?state.visitors:state.analytics.filter(a=>a.event_type==='visit').map(a=>({session_id:a.session_id,city:a.city,ip_address:a.ip_address,page_url:a.page_url,last_seen:a.created_at,onesignal_user_id:a.onesignal_user_id,activity_history:[]}));
-  list.innerHTML=source.length?source.map(v=>`<article class="data-card"><div class="mobile-order-summary"><strong>${escapeHTML(v.city||'Unknown city')} · ${escapeHTML(v.session_id)}</strong><button class="action-btn" data-notify-visitor="${escapeHTML(v.onesignal_user_id||'')}">Notify</button></div><small>IP: ${escapeHTML(v.ip_address||'—')} · Last seen: ${fmtDate(v.last_seen||v.created_at)}</small><small>Page: ${escapeHTML(v.page_url||'—')}</small><small>OneSignal: ${escapeHTML(v.onesignal_user_id||'not subscribed')}</small></article>`).join(''):'<div class="data-card"><strong>Aucun visiteur</strong></div>';
-  list.querySelectorAll('[data-notify-visitor]').forEach(b=>b.addEventListener('click',async()=>{const id=b.dataset.notifyVisitor; if(!id){alert('Ce visiteur n’a pas encore activé les notifications.'); return;} await sendTargetedPush(id,'Soumi Crochet','Nouveau message de Soumi Crochet. Découvrez nos derniers modèles.'); alert('Notification log enregistrée.'); await loadNotifications();}));
+
+function statusText(message, type = 'ok', timeout = 4200) {
+  let el = $('statusBanner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'statusBanner';
+    el.className = 'status-banner';
+    document.body.appendChild(el);
+  }
+
+  el.className = `status-banner ${type}`;
+  el.textContent = message;
+
+  window.clearTimeout(el._timer);
+  if (timeout) {
+    el._timer = window.setTimeout(() => {
+      el.textContent = '';
+      el.className = 'status-banner';
+      el.remove();
+    }, timeout);
+  }
 }
-function renderNotifications(){const wrap=$('notificationsTableWrap'); if(!wrap) return; wrap.innerHTML=state.notifications.length?`<table><thead><tr><th>Date</th><th>Titre</th><th>Message</th><th>Segment</th></tr></thead><tbody>${state.notifications.map(n=>`<tr><td>${fmtDate(n.sent_at)}</td><td>${escapeHTML(n.title)}</td><td>${escapeHTML(n.message)}</td><td>${escapeHTML(n.target_segment)}</td></tr>`).join('')}</tbody></table>`:'<div class="data-card"><strong>Aucun log notification</strong></div>';}
-function renderCharts(){
-  if(!window.Chart) return;
-  const days=[...Array(7)].map((_,i)=>{const d=new Date(Date.now()-(6-i)*86400000); return d.toISOString().slice(0,10);});
-  const visits=days.map(day=>new Set(state.analytics.filter(a=>String(a.created_at||'').slice(0,10)===day&&a.event_type==='visit').map(a=>a.session_id)).size);
-  const revenue=days.map(day=>state.orders.filter(o=>String(o.created_at||'').slice(0,10)===day&&!['cancelled'].includes(o.status)).reduce((s,o)=>s+Number(o.price||0),0));
-  const vc=$('visitsChart'), rc=$('revenueChart');
-  if(vc){ if(visitsChart) visitsChart.destroy(); visitsChart=new Chart(vc,{type:'line',data:{labels:days,datasets:[{label:'Visits',data:visits,tension:.35}]},options:{responsive:true,plugins:{legend:{display:false}}}}); }
-  if(rc){ if(revenueChart) revenueChart.destroy(); revenueChart=new Chart(rc,{type:'bar',data:{labels:days,datasets:[{label:'Revenue',data:revenue}]},options:{responsive:true,plugins:{legend:{display:false}}}}); }
+
+function dbError(label, error) {
+  if (!error) return;
+  console.error(label, error);
+  statusText(`${label}: ${error.message || 'Erreur Supabase'}`, 'error', 7000);
 }
-function exportOrdersCSV(){const headers=['created_at','customer_name','phone','city','address','product_id','product_name','price','status','session_id','onesignal_user_id']; const rows=state.orders.map(o=>headers.map(h=>`"${String(o[h]??'').replace(/"/g,'""')}"`).join(',')); const blob=new Blob([[headers.join(','),...rows].join('\n')],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`soumi-orders-${todayISO()}.csv`; a.click(); URL.revokeObjectURL(url);}
-function openSegmentModal(){renderSegmentList(); $('segmentModal')?.classList.add('show'); $('segmentModal')?.setAttribute('aria-hidden','false');}
-function closeSegmentModal(){ $('segmentModal')?.classList.remove('show'); $('segmentModal')?.setAttribute('aria-hidden','true');}
-function renderSegmentList(){const list=$('segmentList'); if(!list) return; const selected=new Set(String($('notifSegment')?.value||'').split(',').map(x=>x.trim()).filter(Boolean)); list.innerHTML=state.subscribers.length?state.subscribers.map(s=>`<label class="segment-row"><input class="segment-checkbox" type="checkbox" value="${escapeHTML(s.onesignal_player_id)}" ${selected.has(s.onesignal_player_id)||selected.has('All Subscribers')?'checked':''}/><span><strong>${escapeHTML(s.city||'Unknown city')}</strong><small>${escapeHTML(s.onesignal_player_id)} · ${escapeHTML(JSON.stringify(s.device_info||{}).slice(0,120))}</small></span></label>`).join(''):'<div class="data-card"><strong>Aucun abonné</strong></div>';}
-function confirmSegmentSelection(){const ids=[...document.querySelectorAll('.segment-checkbox:checked')].map(x=>x.value); const value=ids.length&&ids.length<state.subscribers.length?ids.join(','):'All Subscribers'; $('notifSegment').value=value; $('selectedSegmentLabel').textContent=value==='All Subscribers'?'All Subscribers':`${ids.length} destinataire(s)`; closeSegmentModal();}
-function initEvents(){
-  document.querySelectorAll('.tab-btn').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
-  $('adminMenuToggle')?.addEventListener('click',()=>$('sidebar')?.classList.toggle('show'));
-  $('refreshBtn')?.addEventListener('click',loadAll); $('exportOrders')?.addEventListener('click',exportOrdersCSV); $('clearOrders')?.addEventListener('click',clearOrders);
-  $('closeDetail')?.addEventListener('click',()=>$('detailModal')?.classList.remove('show')); $('detailModal')?.addEventListener('click',e=>{if(e.target.classList.contains('modal-mask')) $('detailModal')?.classList.remove('show');});
-  $('logoutBtn')?.addEventListener('click',async()=>{await client.auth.signOut(); window.location.href='login.html';});
-  $('openSegmentModalBtn')?.addEventListener('click',openSegmentModal); $('closeSegmentModal')?.addEventListener('click',closeSegmentModal); $('cancelSegmentSelection')?.addEventListener('click',closeSegmentModal); $('segmentModal')?.addEventListener('click',e=>{if(e.target.classList.contains('modal-mask')) closeSegmentModal();}); $('segmentSelectAll')?.addEventListener('change',e=>document.querySelectorAll('.segment-checkbox').forEach(x=>x.checked=e.target.checked)); $('confirmSegmentSelection')?.addEventListener('click',confirmSegmentSelection);
-  $('notificationLogForm')?.addEventListener('submit',async e=>{e.preventDefault(); const title=$('notifTitle').value.trim(), message=$('notifMessage').value.trim(), segment=$('notifSegment').value.trim()||'All Subscribers'; await sendTargetedPush(segment==='All Subscribers'?state.subscribers.map(s=>s.onesignal_player_id):segment.split(','),title,message); e.target.reset(); $('notifSegment').value='All Subscribers'; $('selectedSegmentLabel').textContent='All Subscribers'; await loadNotifications(); alert('Notification enregistrée.');});
-  window.addEventListener('resize',()=>renderOrders());
-  client.channel('soumi-admin-realtime').on('postgres_changes',{event:'*',schema:'public',table:'orders'},loadOrders).on('postgres_changes',{event:'*',schema:'public',table:'reviews'},loadReviews).on('postgres_changes',{event:'*',schema:'public',table:'analytics'},loadAnalytics).on('postgres_changes',{event:'*',schema:'public',table:'visitors'},loadVisitors).subscribe();
+
+function countPageViews(rows = []) {
+  return rows.reduce((total, row) => {
+    const history = normalizeActivityHistory(row.activity_history);
+    return total + history.filter((event) => event && event.type === 'page_view').length;
+  }, 0);
 }
-async function init(){const session=await requireSession(); if(!session) return; initEvents(); await loadAll();}
-document.addEventListener('DOMContentLoaded',init);
+
+function deliveredRevenue(orders = []) {
+  return orders.reduce((sum, order) => {
+    return String(order.status || '').toLowerCase() === 'delivered'
+      ? sum + (Number(order.price) || 0)
+      : sum;
+  }, 0);
+}
+
+function getOrderImage(order) {
+  const direct = normalizeUrl(order.image_url || order.selected_product_image || '');
+  if (direct) return direct;
+
+  const product = state.products.find((item) => String(item.id) === String(order.product_id));
+  const image = product?.images?.[0] || product?.image || product?.mainImage || '';
+  return normalizeUrl(image);
+}
+
+async function requireAuth() {
+  const { data, error } = await client.auth.getSession();
+  if (error) {
+    dbError('Auth', error);
+    return;
+  }
+
+  if (!data.session) {
+    location.href = 'login.html';
+  }
+}
+
+async function loadProductsCatalog() {
+  const paths = ['./products.json', '../products.json', '/products.json'];
+  for (const path of paths) {
+    try {
+      const res = await fetch(path, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      state.products = Array.isArray(data) ? data : (Array.isArray(data.products) ? data.products : []);
+      return;
+    } catch (_) {}
+  }
+  state.products = [];
+}
+
+async function fetchTable(name, queryBuilder) {
+  try {
+    const { data, error } = await queryBuilder;
+    if (error) {
+      dbError(`Table ${name}`, error);
+      return [];
+    }
+    return data || [];
+  } catch (error) {
+    dbError(`Table ${name}`, error);
+    return [];
+  }
+}
+
+async function loadAll() {
+  const [orders, reviews, analytics, subscribers, logs] = await Promise.all([
+    fetchTable('orders', client.from('orders').select('*').order('created_at', { ascending: false })),
+    fetchTable('reviews', client.from('reviews').select('*').order('created_at', { ascending: false })),
+    fetchTable('analytics', client.from('analytics').select('*').order('last_seen', { ascending: false })),
+    fetchTable('subscribers', client.from('subscribers').select('*').order('created_at', { ascending: false })),
+    fetchTable('notification_logs', client.from('notification_logs').select('*').order('sent_at', { ascending: false }).limit(120))
+  ]);
+
+  state.orders = orders;
+  state.reviews = reviews;
+  state.analytics = analytics;
+  state.visitors = analytics;
+  state.subscribers = subscribers;
+  state.logs = logs;
+
+  renderStats();
+  renderOrders();
+  renderReviews();
+  renderVisitors();
+  renderAnalyticsTable();
+  renderLogs();
+  populateSegmentList();
+  renderAnalyticsChart();
+}
+
+function renderStats() {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const todayVisitors = state.analytics.filter((row) => {
+    const date = row.last_seen || row.created_at;
+    return date && String(date).slice(0, 10) === today;
+  }).length;
+
+  const pendingOrders = state.orders.filter((order) => {
+    const status = String(order.status || '').toLowerCase();
+    return status === 'pending' || status === 'new';
+  }).length;
+
+  const values = {
+    statOrders: state.orders.length,
+    statRevenue: money(deliveredRevenue(state.orders)),
+    statVisitors: todayVisitors,
+    statReviews: state.reviews.length,
+    statPageViews: countPageViews(state.analytics),
+    statSubscribers: state.subscribers.length,
+    statPending: pendingOrders
+  };
+
+  Object.entries(values).forEach(([id, value]) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  });
+}
+
+function getDailyPageViewCounts() {
+  const buckets = {};
+  state.analytics.forEach((row) => {
+    normalizeActivityHistory(row.activity_history).forEach((event) => {
+      if (event?.type !== 'page_view') return;
+      const date = String(event.at || event.timestamp || row.last_seen || row.created_at || '').slice(0, 10);
+      if (!date) return;
+      buckets[date] = (buckets[date] || 0) + 1;
+    });
+  });
+
+  return Object.entries(buckets)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-14)
+    .map(([date, count]) => ({ date, count }));
+}
+
+function renderAnalyticsChart() {
+  const canvas = $('analyticsChart') || $('salesChart') || $('visitorsChart');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  const daily = getDailyPageViewCounts();
+
+  if (state.chart) {
+    state.chart.destroy();
+    state.chart = null;
+  }
+
+  state.chart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: daily.map((item) => item.date),
+      datasets: [{
+        label: 'Page Views',
+        data: daily.map((item) => item.count),
+        tension: 0.35,
+        fill: true,
+        borderColor: '#7a1730',
+        backgroundColor: 'rgba(122, 23, 48, 0.1)'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+    }
+  });
+}
+
+function renderOrders() {
+  const root = $('ordersList');
+  if (!root) return;
+
+  if (!state.orders.length) {
+    root.innerHTML = '<p class="empty-state">Aucune commande pour le moment.</p>';
+    return;
+  }
+
+  root.innerHTML = state.orders.map((order) => {
+    const status = String(order.status || 'pending').toLowerCase();
+    const showTrack = status === 'shipped' && order.onesignal_user_id;
+
+    return `
+      <article class="order-card" data-id="${safeText(order.id)}">
+        <div class="card-main">
+          <div>
+            <strong>${safeText(order.customer_name || '-')}</strong>
+            <div class="meta">
+              <span>${safeText(order.city || '-')}</span>
+              <span class="status-pill ${safeText(status)}">${safeText(status)}</span>
+            </div>
+          </div>
+
+          <div class="actions">
+            ${showTrack ? `
+              <button class="btn-success btn-sm" type="button" data-open-track-push="${safeText(order.id)}">
+                🚚 إشعار التوصيل
+              </button>
+            ` : ''}
+            <button class="toggle-details" type="button" data-view-order="${safeText(order.id)}">
+              Voir les détails
+            </button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  qsa('[data-view-order]', root).forEach((btn) => {
+    btn.addEventListener('click', () => openOrderModal(btn.dataset.viewOrder));
+  });
+
+  qsa('[data-open-track-push]', root).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const order = state.orders.find((item) => String(item.id) === String(btn.dataset.openTrackPush));
+      if (order) openTrackModal(order);
+    });
+  });
+}
+
+function openOrderModal(orderId) {
+  const order = state.orders.find((item) => String(item.id) === String(orderId));
+  const modal = $('orderModal');
+  const body = $('orderModalContent');
+  if (!order || !modal || !body) return;
+
+  const imageUrl = getOrderImage(order);
+  const phone = normalizePhone(order.phone);
+  const text = encodeURIComponent(`سلام ${order.customer_name || ''}، بغينا نأكدو الطلب ديالك من Soumi Crochet: ${order.product_name || ''} بثمن ${order.price || ''} DH.`);
+  const waHref = phone ? `https://wa.me/${phone}?text=${text}` : '#';
+
+  body.innerHTML = `
+    ${imageUrl ? `<img src="${safeText(imageUrl)}" alt="Product" class="image-preview">` : ''}
+    <div class="detail-grid">
+      <div class="detail-item"><small>Customer</small><strong>${safeText(order.customer_name || '-')}</strong></div>
+      <div class="detail-item"><small>Phone</small><strong>${safeText(order.phone || '-')}</strong></div>
+      <div class="detail-item"><small>City</small><strong>${safeText(order.city || '-')}</strong></div>
+      <div class="detail-item"><small>Address</small><strong>${safeText(order.address || '-')}</strong></div>
+      <div class="detail-item"><small>Product</small><strong>${safeText(order.product_name || '-')}</strong></div>
+      <div class="detail-item"><small>Price</small><strong>${money(order.price)}</strong></div>
+      <div class="detail-item"><small>Date</small><strong>${fmtDate(order.created_at)}</strong></div>
+      <div class="detail-item">
+        <small>Status</small>
+        <select class="status-select" id="statusSelect-${safeText(order.id)}">
+          ${['pending','confirmed','processing','shipped','delivered','cancelled'].map((status) => `
+            <option value="${status}" ${String(order.status || 'pending') === status ? 'selected' : ''}>${status}</option>
+          `).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:15px;">
+      <a href="${waHref}" target="_blank" rel="noopener">Confirm & WhatsApp</a>
+      <button type="button" class="delete" data-delete-order-modal="${safeText(order.id)}">Delete</button>
+    </div>
+  `;
+
+  setModalOpen('orderModal', true);
+
+  $(`statusSelect-${order.id}`)?.addEventListener('change', async (event) => {
+    const { error } = await client
+      .from('orders')
+      .update({ status: event.target.value })
+      .eq('id', order.id);
+
+    if (error) dbError('Update order status', error);
+    await loadAll();
+  });
+
+  body.querySelector('[data-delete-order-modal]')?.addEventListener('click', async () => {
+    if (!confirm('Supprimer cette commande ?')) return;
+
+    const { error } = await client.from('orders').delete().eq('id', order.id);
+    if (error) {
+      dbError('Delete order', error);
+      return;
+    }
+
+    setModalOpen('orderModal', false);
+    await loadAll();
+  });
+}
+
+function renderReviews() {
+  const root = $('reviewsList');
+  if (!root) return;
+
+  if (!state.reviews.length) {
+    root.innerHTML = '<p class="empty-state">Aucun avis pour le moment.</p>';
+    return;
+  }
+
+  root.innerHTML = state.reviews.map((review) => {
+    const isPublished = Boolean(review.is_published) || review.status === 'approved';
+    const rating = Math.max(1, Math.min(5, Number(review.rating) || 5));
+
+    return `
+      <article class="review-card">
+        <div class="card-main">
+          <div>
+            <strong>${safeText(review.reviewer_name || '-')}</strong>
+            <div class="meta">
+              <span>${'★'.repeat(rating)}</span>
+              <span>${safeText(review.city || '-')}</span>
+              <span>${isPublished ? 'Publié' : 'Attente'}</span>
+            </div>
+          </div>
+        </div>
+
+        <p>${safeText(review.review_text || '')}</p>
+
+        <div class="actions">
+          <button class="approve" type="button" data-approve-review="${safeText(review.id)}">
+            ${isPublished ? 'Masquer' : 'Approuver'}
+          </button>
+          <button class="delete" type="button" data-delete-review="${safeText(review.id)}">Delete</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  qsa('[data-approve-review]', root).forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const review = state.reviews.find((item) => String(item.id) === String(btn.dataset.approveReview));
+      if (!review) return;
+
+      const nextPublished = !(Boolean(review.is_published) || review.status === 'approved');
+
+      const { error } = await client
+        .from('reviews')
+        .update({
+          is_published: nextPublished,
+          status: nextPublished ? 'approved' : 'pending'
+        })
+        .eq('id', review.id);
+
+      if (error) dbError('Update review', error);
+      await loadAll();
+    });
+  });
+
+  qsa('[data-delete-review]', root).forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Supprimer cet avis ?')) return;
+
+      const { error } = await client.from('reviews').delete().eq('id', btn.dataset.deleteReview);
+      if (error) dbError('Delete review', error);
+      await loadAll();
+    });
+  });
+}
+
+function parseActivityLog(value) {
+  const history = normalizeActivityHistory(value);
+  if (!history.length) return '<p class="muted">Aucune activité enregistrée.</p>';
+
+  return `
+    <ol class="activity-list">
+      ${history.slice(-30).reverse().map((event) => {
+        const type = event?.type || 'event';
+        const at = event?.at || event?.timestamp || '';
+
+        if (type === 'product_view') {
+          return `<li>👀 A vu le produit: ${safeText(event.meta?.product_name || event.product_name || '-')} <small>${safeText(at)}</small></li>`;
+        }
+
+        if (type === 'push_subscribe') {
+          return `<li>🔔 A activé les notifications <small>${safeText(at)}</small></li>`;
+        }
+
+        if (type === 'page_view') {
+          return `<li>📄 Page visitée: ${safeText(event.page_url || event.path || event.page || '-')} <small>${safeText(at)}</small></li>`;
+        }
+
+        if (type === 'form_draft') {
+          return `<li>📝 A commencé le formulaire <small>${safeText(at)}</small></li>`;
+        }
+
+        if (type === 'order_submit') {
+          return `<li>👜 A envoyé une commande <small>${safeText(at)}</small></li>`;
+        }
+
+        return `<li>• ${safeText(type)} <small>${safeText(at)}</small></li>`;
+      }).join('')}
+    </ol>
+  `;
+}
+
+function renderVisitors() {
+  const root = $('visitorsList');
+  if (!root) return;
+
+  if (!state.visitors.length) {
+    root.innerHTML = '<p class="empty-state">Aucun visiteur pour le moment.</p>';
+    return;
+  }
+
+  root.innerHTML = state.visitors.map((visitor) => `
+    <article class="visitor-card">
+      <div class="card-main">
+        <div>
+          <strong>${safeText(visitor.ip_address || 'IP inconnue')}</strong>
+          <div class="meta">
+            <span>${safeText(visitor.city || 'Ville inconnue')}</span>
+            <span>${fmtDate(visitor.last_seen || visitor.created_at)}</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          ${visitor.onesignal_user_id ? `
+            <button type="button" data-notify-visitor="${safeText(visitor.visitor_id)}">Notify</button>
+          ` : ''}
+          <button class="toggle-details" type="button" data-view-visitor="${safeText(visitor.visitor_id)}">Voir les détails</button>
+        </div>
+      </div>
+    </article>
+  `).join('');
+
+  qsa('[data-view-visitor]', root).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const visitor = state.visitors.find((item) => String(item.visitor_id) === String(btn.dataset.viewVisitor));
+      if (visitor) openVisitorModal(visitor);
+    });
+  });
+
+  qsa('[data-notify-visitor]', root).forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const visitor = state.visitors.find((item) => String(item.visitor_id) === String(btn.dataset.notifyVisitor));
+      if (!visitor?.onesignal_user_id) return;
+
+      try {
+        await sendOneSignalPush({
+          title: '✨ Soumi Crochet',
+          message: '👜 كاينين موديلات جداد كيتسناوك. دخلي تشوفيهم دابا!',
+          playerIds: [visitor.onesignal_user_id]
+        });
+
+        await client.from('notification_logs').insert({
+          title: '✨ Soumi Crochet',
+          message: 'Visitor targeted push',
+          target_segment: visitor.onesignal_user_id
+        });
+
+        statusText('Notification envoyée au visiteur.', 'ok');
+        await loadAll();
+      } catch (error) {
+        dbError('Visitor push', error);
+      }
+    });
+  });
+}
+
+function openVisitorModal(visitor) {
+  const body = $('visitorModalContent');
+  if (!body) return;
+
+  body.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-item"><small>Visitor ID</small><strong>${safeText(visitor.visitor_id || '-')}</strong></div>
+      <div class="detail-item"><small>IP</small><strong>${safeText(visitor.ip_address || '-')}</strong></div>
+      <div class="detail-item"><small>City</small><strong>${safeText(visitor.city || '-')}</strong></div>
+      <div class="detail-item"><small>Last seen</small><strong>${fmtDate(visitor.last_seen || visitor.created_at)}</strong></div>
+      <div class="detail-item"><small>Time spent</small><strong>${safeText(visitor.time_spent_seconds || 0)}s</strong></div>
+      <div class="detail-item"><small>OneSignal</small><strong>${visitor.onesignal_user_id ? 'Oui' : 'Non'}</strong></div>
+    </div>
+
+    <h3>Activity Log</h3>
+    ${parseActivityLog(visitor.activity_history)}
+  `;
+
+  setModalOpen('visitorModal', true);
+}
+
+function renderAnalyticsTable() {
+  const root = $('analyticsTableBody');
+  if (!root) return;
+
+  const rows = state.analytics.slice(0, 80).map((row) => {
+    const history = normalizeActivityHistory(row.activity_history);
+    const lastEvent = history[history.length - 1] || {};
+
+    return `
+      <tr>
+        <td>${safeText(row.visitor_id || row.id || '-')}</td>
+        <td>${safeText(row.ip_address || '-')}</td>
+        <td>${safeText(row.city || '-')}</td>
+        <td>${safeText(lastEvent.page_url || lastEvent.page || lastEvent.path || row.page_url || '-')}</td>
+        <td>${fmtDate(row.last_seen || row.created_at)}</td>
+        <td>${safeText(row.time_spent_seconds || 0)}s</td>
+      </tr>
+    `;
+  }).join('');
+
+  root.innerHTML = rows || '<tr><td colspan="6">Aucun événement.</td></tr>';
+}
+
+function renderLogs() {
+  const root = $('notificationLogsList') || $('notificationLogs');
+  if (!root) return;
+
+  if (!state.logs.length) {
+    root.innerHTML = '<p class="empty-state">Aucun log de notification.</p>';
+    return;
+  }
+
+  root.innerHTML = state.logs.map((log) => `
+    <article class="log-card">
+      <strong>${safeText(log.title || '-')}</strong>
+      <p>${safeText(log.message || '')}</p>
+      <div class="meta">
+        <span>${safeText(log.target_segment || 'All')}</span>
+        <span>${fmtDate(log.sent_at)}</span>
+      </div>
+    </article>
+  `).join('');
+}
+
+function subscriberDisplayCity(subscriber) {
+  return subscriber.city || subscriber.device_info?.city || 'Ville inconnue';
+}
+
+function subscriberDisplayIP(subscriber) {
+  return subscriber.ip_address ||
+    subscriber.device_info?.ip ||
+    subscriber.device_info?.ip_address ||
+    subscriber.device_info?.ipAddress ||
+    'IP inconnue';
+}
+
+function populateSegmentList() {
+  const list = $('segmentList');
+  if (!list) return;
+
+  if (!state.subscribers.length) {
+    list.innerHTML = '<p class="muted">Aucun abonné trouvé.</p>';
+    return;
+  }
+
+  list.innerHTML = state.subscribers.map((subscriber) => {
+    const playerId = subscriber.onesignal_player_id || '';
+    return `
+      <label class="subscriber-row">
+        <input type="checkbox" value="${safeText(playerId)}">
+        <span>
+          <strong>${safeText(subscriberDisplayIP(subscriber))}</strong>
+          <small>${safeText(subscriberDisplayCity(subscriber))}</small>
+        </span>
+      </label>
+    `;
+  }).join('');
+}
+
+function setModalOpen(modalId, open) {
+  const modal = $(modalId);
+  if (!modal) return;
+  modal.classList.toggle('active', Boolean(open));
+  modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+  document.body.classList.toggle('no-scroll', Boolean(document.querySelector('.modal.active')));
+}
+
+function closeAnyOpenModal() {
+  qsa('.modal.active').forEach((modal) => {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  });
+  document.body.classList.remove('no-scroll');
+}
+
+function playNewOrderSound() {
+  try {
+    const existing = $('newOrderAudio');
+    if (existing) {
+      existing.currentTime = 0;
+      existing.play().catch(() => {});
+      return;
+    }
+
+    const audio = new Audio('./notification.mp3');
+    audio.volume = 0.9;
+    audio.play().catch(() => {});
+  } catch (_) {}
+}
+
+function notifyAdminNewOrder(order) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const body = [
+    `Nom: ${order.customer_name || '-'}`,
+    `Téléphone: ${order.phone || '-'}`,
+    `Ville: ${order.city || '-'}`,
+    `Adresse: ${order.address || '-'}`
+  ].join('\n');
+
+  new Notification('👜 Nouvelle commande Soumi Crochet', {
+    body,
+    icon: normalizeUrl(order.image_url) || './logo.png',
+    badge: './logo.png',
+    tag: `order-${order.id || Date.now()}`
+  });
+}
+
+async function requestAdminNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    try {
+      await Notification.requestPermission();
+    } catch (_) {}
+  }
+}
+
+function openTrackModal(order) {
+  const modal = $('trackModal');
+  if (!modal) return;
+
+  const title = '🎉 طلبك راه فالطريق!';
+  const message = `🚚 الصاك ديالك (${order.product_name}) خرج من عندنا وقريب يوصلك لـ ${order.city}. وجدي راسك! ✨`;
+  const ctaText = 'شكراً Soumi Crochet';
+  const ctaUrl = 'https://wa.me/212662711995?text=' + encodeURIComponent('شكرا soumicrochet على اهتمامكم راني كنتسنى الطلب بفارغ الصبر');
+
+  $('trackOneSignalUserId').value = order.onesignal_user_id || '';
+  $('trackOrderId').value = order.id || '';
+  $('trackTitle').value = title;
+  $('trackMessage').value = message;
+  if ($('trackUrl')) $('trackUrl').value = ctaUrl;
+  if ($('trackButtonText')) $('trackButtonText').value = ctaText;
+
+  const status = $('trackPushStatus');
+  if (status) status.textContent = '';
+
+  setModalOpen('trackModal', true);
+}
+
+function closeTrackModal() {
+  setModalOpen('trackModal', false);
+}
+
+async function sendOneSignalPush({ title, message, playerIds = null, includedSegments = null, url = 'https://soumicrochet.store/', buttonText = 'اطلب الآن' }) {
+  const payload = {
+    app_id: ONESIGNAL_APP_ID,
+    headings: { en: title, fr: title, ar: title },
+    contents: { en: message, fr: message, ar: message },
+    buttons: [{ id: 'order-btn', text: buttonText || 'اطلب الآن', url: url || 'https://soumicrochet.store/' }],
+    url: url || 'https://soumicrochet.store/'
+  };
+
+  if (Array.isArray(playerIds) && playerIds.length) {
+    payload.include_player_ids = playerIds;
+  } else {
+    payload.included_segments = includedSegments || ['All'];
+  }
+
+  const response = await fetch('https://onesignal.com/api/v1/notifications', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Basic ${ONESIGNAL_REST_API_KEY}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(Array.isArray(data?.errors) ? data.errors.join(', ') : data?.errors || 'OneSignal push failed');
+  }
+
+  return data;
+}
+
+function initTrackPushModal() {
+  qsa('[data-close-track-modal]').forEach((button) => {
+    button.addEventListener('click', closeTrackModal);
+  });
+
+  $('trackPushForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const form = event.currentTarget;
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const status = $('trackPushStatus');
+
+    const title = $('trackTitle')?.value.trim();
+    const message = $('trackMessage')?.value.trim();
+    const playerId = $('trackOneSignalUserId')?.value.trim();
+    const url = $('trackUrl')?.value.trim() || 'https://soumicrochet.store/';
+    const buttonText = $('trackButtonText')?.value.trim() || 'اطلب الآن';
+    const originalText = submitBtn?.textContent || '';
+
+    if (!title || !message || !playerId) {
+      if (status) status.textContent = 'Client OneSignal introuvable.';
+      return;
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Envoi...';
+    }
+
+    try {
+      await sendOneSignalPush({ title, message, playerIds: [playerId], url, buttonText });
+      const { error } = await client.from('notification_logs').insert({ title, message, target_segment: `${playerId} | CTA: ${url}` });
+      if (error) dbError('Notification log', error);
+
+      if (status) status.textContent = 'Notification envoyée avec succès.';
+      setTimeout(() => {
+        closeTrackModal();
+        loadAll();
+      }, 900);
+    } catch (error) {
+      dbError('OneSignal', error);
+      if (status) status.textContent = 'Erreur pendant l’envoi.';
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+      }
+    }
+  });
+}
+
+function initTabs() {
+  const buttons = qsa('.nav-tab, .tab-btn');
+  const panels = qsa('.tab-panel, .tab');
+
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      buttons.forEach((item) => item.classList.remove('active'));
+      panels.forEach((panel) => panel.classList.remove('active'));
+
+      btn.classList.add('active');
+      $(`tab-${tab}`)?.classList.add('active');
+
+      const title = btn.querySelector('strong')?.textContent?.trim() || btn.textContent.trim();
+      if ($('pageTitle')) $('pageTitle').textContent = title;
+      if ($('tabTitle')) $('tabTitle').textContent = title;
+
+      $('sidebar')?.classList.remove('show');
+    });
+  });
+}
+
+function exportOrdersCSV() {
+  const headers = ['created_at', 'customer_name', 'phone', 'city', 'address', 'product_name', 'price', 'status'];
+  const lines = [headers.join(',')];
+
+  state.orders.forEach((order) => {
+    lines.push(headers.map((key) => `"${String(order[key] ?? '').replaceAll('"', '""')}"`).join(','));
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `soumi-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function deleteTableRows(table) {
+  if (!table) return;
+  if (!confirm('⚠️ Êtes-vous sûr de vouloir tout supprimer ?')) return;
+
+  const { error } = await client.from(table).delete().not('id', 'is', null);
+  if (error) {
+    dbError(`Nettoyer ${table}`, error);
+    return;
+  }
+
+  statusText(`Table ${table} nettoyée.`, 'ok');
+  await loadAll();
+}
+
+function initEvents() {
+  $('adminMenuToggle')?.addEventListener('click', () => $('sidebar')?.classList.toggle('show'));
+  $('adminMenu')?.addEventListener('click', () => $('sidebar')?.classList.toggle('show'));
+
+  $('logoutBtn')?.addEventListener('click', async () => {
+    await client.auth.signOut();
+    location.href = 'login.html';
+  });
+
+  $('refreshBtn')?.addEventListener('click', loadAll);
+  $('manualRefreshBtn')?.addEventListener('click', loadAll);
+  $('requestNotificationsBtn')?.addEventListener('click', requestAdminNotificationPermission);
+  $('exportOrdersBtn')?.addEventListener('click', exportOrdersCSV);
+
+  $('clearPendingOrdersBtn')?.addEventListener('click', async () => {
+    if (!confirm('Supprimer toutes les commandes pending/new ?')) return;
+    const { error } = await client
+      .from('orders')
+      .delete()
+      .in('status', ['pending', 'new']);
+    if (error) dbError('Clear pending orders', error);
+    await loadAll();
+  });
+
+  qsa('[data-clean-table], .clean-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteTableRows(btn.dataset.cleanTable || btn.dataset.clean));
+  });
+
+  $('openSegmentModalBtn')?.addEventListener('click', () => {
+    populateSegmentList();
+    setModalOpen('segmentModal', true);
+  });
+
+  qsa('[data-close-segment-modal]').forEach((el) => el.addEventListener('click', () => setModalOpen('segmentModal', false)));
+  qsa('[data-close-order-modal]').forEach((el) => el.addEventListener('click', () => setModalOpen('orderModal', false)));
+  qsa('[data-close-visitor-modal]').forEach((el) => el.addEventListener('click', () => setModalOpen('visitorModal', false)));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeAnyOpenModal();
+  });
+
+  $('segmentSelectAll')?.addEventListener('change', (event) => {
+    qsa('#segmentList input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.checked = event.target.checked;
+    });
+  });
+
+  $('confirmSegmentSelection')?.addEventListener('click', () => {
+    const ids = qsa('#segmentList input[type="checkbox"]:checked')
+      .map((checkbox) => checkbox.value)
+      .filter(Boolean);
+
+    if ($('selectedSegmentIds')) $('selectedSegmentIds').value = ids.join(',');
+    if ($('openSegmentModalBtn')) $('openSegmentModalBtn').textContent = ids.length ? `${ids.length} sélectionnés` : 'Choisir les destinataires';
+    if ($('selectedSegmentLabel')) $('selectedSegmentLabel').textContent = ids.length ? `${ids.length} destinataire(s)` : 'Broadcast: All';
+
+    setModalOpen('segmentModal', false);
+  });
+
+  $('notificationForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const title = $('notificationTitle')?.value.trim();
+    const message = $('notificationMessage')?.value.trim();
+    const url = $('notificationUrl')?.value.trim() || 'https://soumicrochet.store/';
+    const buttonText = $('notificationButtonText')?.value.trim() || 'اطلب الآن';
+    const status = $('notificationStatus');
+    const selectedTargets = $('selectedSegmentIds')?.value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean) || [];
+
+    const submitBtn = event.currentTarget.querySelector('button[type="submit"]');
+    const originalText = submitBtn?.textContent || '';
+
+    if (!title || !message) {
+      if (status) status.textContent = 'Titre et message obligatoires.';
+      return;
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Envoi...';
+    }
+
+    try {
+      await sendOneSignalPush({
+        title,
+        message,
+        playerIds: selectedTargets.length ? selectedTargets : null,
+        includedSegments: selectedTargets.length ? null : ['All'],
+        url,
+        buttonText
+      });
+
+      const { error } = await client.from('notification_logs').insert({
+        title,
+        message,
+        target_segment: selectedTargets.length ? `${selectedTargets.join(',')} | CTA: ${url}` : `All | CTA: ${url}`
+      });
+
+      if (error) dbError('Notification log', error);
+
+      if (status) status.textContent = 'Push envoyé !';
+      event.currentTarget.reset();
+
+      if ($('selectedSegmentIds')) $('selectedSegmentIds').value = '';
+      if ($('openSegmentModalBtn')) $('openSegmentModalBtn').textContent = 'Choisir les destinataires';
+      if ($('selectedSegmentLabel')) $('selectedSegmentLabel').textContent = 'Broadcast: All';
+
+      await loadAll();
+    } catch (error) {
+      dbError('Push notification', error);
+      if (status) status.textContent = 'Erreur Push. Vérifiez la clé OneSignal et la console.';
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText || 'Envoyer notification';
+      }
+    }
+  });
+}
+
+function debouncedLoadAll() {
+  window.clearTimeout(debouncedLoadAll.timer);
+  debouncedLoadAll.timer = window.setTimeout(loadAll, 450);
+}
+
+function initRealtime() {
+  requestAdminNotificationPermission();
+
+  const channel = client
+    .channel('soumi-admin-live-v2')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+      if (payload.eventType === 'INSERT' && payload.new) {
+        playNewOrderSound();
+        notifyAdminNewOrder(payload.new);
+        statusText('Nouvelle commande reçue.', 'ok');
+      }
+      debouncedLoadAll();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'analytics' }, debouncedLoadAll)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'reviews' }, debouncedLoadAll)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'subscribers' }, debouncedLoadAll)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'notification_logs' }, debouncedLoadAll)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        state.realtimeReady = true;
+        statusText('Realtime connecté.', 'ok', 2200);
+      }
+
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        state.realtimeReady = false;
+        statusText('Realtime غير متصل، خدام polling backup.', 'error', 5200);
+      }
+    });
+
+  state.pollTimer = window.setInterval(() => {
+    if (!state.realtimeReady) loadAll();
+  }, 12000);
+
+  return channel;
+}
+
+async function init() {
+  await requireAuth();
+  await loadProductsCatalog();
+  initTabs();
+  initEvents();
+  initTrackPushModal();
+  await loadAll();
+  initRealtime();
+}
+
+document.addEventListener('DOMContentLoaded', init);
