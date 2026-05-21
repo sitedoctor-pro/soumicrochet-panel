@@ -705,6 +705,24 @@ function notifyAdminNewOrder(order) {
   });
 }
 
+
+function notifyAdminNewReview(review) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const body = [
+    `Nom: ${review.reviewer_name || '-'}`,
+    `Ville: ${review.city || '-'}`,
+    `Avis: ${String(review.review_text || '').slice(0, 120)}`
+  ].join('\n');
+
+  new Notification('⭐ Nouvel avis Soumi Crochet', {
+    body,
+    icon: './logo.png',
+    badge: './logo.png',
+    tag: `review-${review.id || Date.now()}`
+  });
+}
+
 async function wait(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
 async function requestAdminNotificationPermission() {
@@ -856,25 +874,42 @@ function initTrackPushModal() {
   });
 }
 
-function initTabs() {
+function switchAdminTab(tab) {
+  if (!tab) return;
   const buttons = qsa('.nav-tab, .tab-btn');
   const panels = qsa('.tab-panel, .tab');
+  const btn = buttons.find((item) => item.dataset.tab === tab);
+  const panel = $(`tab-${tab}`);
+  if (!btn || !panel) return;
+
+  buttons.forEach((item) => item.classList.remove('active'));
+  panels.forEach((item) => item.classList.remove('active'));
+  btn.classList.add('active');
+  panel.classList.add('active');
+
+  const title = btn.querySelector('strong')?.textContent?.trim() || btn.textContent.trim();
+  if ($('pageTitle')) $('pageTitle').textContent = title;
+  if ($('tabTitle')) $('tabTitle').textContent = title;
+  $('sidebar')?.classList.remove('show');
+}
+
+function initTabs() {
+  const buttons = qsa('.nav-tab, .tab-btn');
 
   buttons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.tab;
-      buttons.forEach((item) => item.classList.remove('active'));
-      panels.forEach((panel) => panel.classList.remove('active'));
-
-      btn.classList.add('active');
-      $(`tab-${tab}`)?.classList.add('active');
-
-      const title = btn.querySelector('strong')?.textContent?.trim() || btn.textContent.trim();
-      if ($('pageTitle')) $('pageTitle').textContent = title;
-      if ($('tabTitle')) $('tabTitle').textContent = title;
-
-      $('sidebar')?.classList.remove('show');
+      switchAdminTab(tab);
+      if (tab) history.replaceState(null, '', `#${tab}`);
     });
+  });
+
+  const hashTab = String(location.hash || '').replace('#', '').trim();
+  if (hashTab) switchAdminTab(hashTab);
+
+  window.addEventListener('hashchange', () => {
+    const tab = String(location.hash || '').replace('#', '').trim();
+    if (tab) switchAdminTab(tab);
   });
 }
 
@@ -1051,7 +1086,14 @@ function initRealtime() {
       debouncedLoadAll();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'analytics' }, debouncedLoadAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'reviews' }, debouncedLoadAll)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'reviews' }, (payload) => {
+      if (payload.eventType === 'INSERT' && payload.new) {
+        playNewOrderSound();
+        notifyAdminNewReview(payload.new);
+        statusText('Nouvel avis reçu.', 'ok');
+      }
+      debouncedLoadAll();
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'subscribers' }, debouncedLoadAll)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'notification_logs' }, debouncedLoadAll)
     .subscribe((status) => {
