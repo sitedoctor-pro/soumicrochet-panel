@@ -1,6 +1,7 @@
 const SUPABASE_URL = 'https://axgcycsojorwztwlfprg.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_1YuKU9O3wuH1Zbikx_OonQ_ayCIjmSR';
-const ONESIGNAL_APP_ID = 'b0ca17c7-75cb-49bb-bfbd-936677a81519';
+const WEBSITE_ONESIGNAL_APP_ID = 'b0ca17c7-75cb-49bb-bfbd-936677a81519';
+const ADMIN_ONESIGNAL_APP_ID = '7e6b1cf8-6a2f-44ad-ada2-f623c8046d81';
 const ONESIGNAL_REST_API_KEY = 'os_v2_app_mvsrfcqu7zdmhpuhorop3efsmrqpwmgrm4xurl4b3zmllikl4drp4r7vv4ra7gpsey4iivgzaxi6arqs2ige4eaquuy3ajkwg735ioq';
 
 const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -704,12 +705,41 @@ function notifyAdminNewOrder(order) {
   });
 }
 
+async function wait(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
 async function requestAdminNotificationPermission() {
-  if ('Notification' in window && Notification.permission === 'default') {
-    try {
+  if (!('Notification' in window)) return;
+
+  try {
+    if (Notification.permission === 'default') {
       await Notification.requestPermission();
-    } catch (_) {}
-  }
+    }
+
+    if (window.OneSignalDeferred) {
+      await new Promise((resolve) => {
+        window.OneSignalDeferred.push(async function(OneSignal){
+          try {
+            if (OneSignal?.Notifications?.isPushSupported && !OneSignal.Notifications.isPushSupported()) {
+              resolve();
+              return;
+            }
+
+            if (Notification.permission !== 'granted' && OneSignal?.Notifications?.requestPermission) {
+              await OneSignal.Notifications.requestPermission();
+            }
+
+            if (Notification.permission === 'granted' && OneSignal?.User?.PushSubscription?.optIn) {
+              await OneSignal.User.PushSubscription.optIn();
+            }
+          } catch (err) {
+            console.warn('Admin OneSignal subscribe failed:', err);
+          } finally {
+            resolve();
+          }
+        });
+      });
+    }
+  } catch (_) {}
 }
 
 function openTrackModal(order) {
@@ -738,17 +768,22 @@ function closeTrackModal() {
   setModalOpen('trackModal', false);
 }
 
-async function sendOneSignalPush({ title, message, playerIds = null, includedSegments = null, url = 'https://soumicrochet.store/', buttonText = 'اطلب الآن' }) {
+async function sendOneSignalPush({ title, message, playerIds = null, includedSegments = null, url = 'https://soumicrochet.store/', buttonText = 'اطلب الآن', appId = WEBSITE_ONESIGNAL_APP_ID }) {
   const payload = {
-    app_id: ONESIGNAL_APP_ID,
+    app_id: appId,
     headings: { en: title, fr: title, ar: title },
     contents: { en: message, fr: message, ar: message },
-    buttons: [{ id: 'order-btn', text: buttonText || 'اطلب الآن', url: url || 'https://soumicrochet.store/' }],
-    url: url || 'https://soumicrochet.store/'
+    url: url || 'https://soumicrochet.store/',
+    web_url: url || 'https://soumicrochet.store/',
+    buttons: [{ id: 'order-btn', text: buttonText || 'اطلب الآن' }],
+    web_buttons: [{ id: 'order-btn', text: buttonText || 'اطلب الآن', url: url || 'https://soumicrochet.store/' }],
+    chrome_web_icon: 'https://soumicrochet.store/assets/img/logo.png',
+    firefox_icon: 'https://soumicrochet.store/assets/img/logo.png',
+    isAnyWeb: true
   };
 
   if (Array.isArray(playerIds) && playerIds.length) {
-    payload.include_player_ids = playerIds;
+    payload.include_subscription_ids = playerIds;
   } else {
     payload.included_segments = includedSegments || ['All'];
   }
@@ -763,7 +798,7 @@ async function sendOneSignalPush({ title, message, playerIds = null, includedSeg
   });
 
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  if (!response.ok || data?.id === '') {
     throw new Error(Array.isArray(data?.errors) ? data.errors.join(', ') : data?.errors || 'OneSignal push failed');
   }
 
