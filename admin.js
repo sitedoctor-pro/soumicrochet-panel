@@ -39,6 +39,61 @@ function deliveredRevenue(orders = []) {
   }, 0);
 }
 
+
+function visitorGroupKey(row = {}) {
+  const ip = String(row.ip_address || '').trim();
+  const city = String(row.city || '').trim();
+  if (ip) return `ip:${ip}|city:${city || '-'}`;
+  return `visitor:${row.visitor_id || row.id || Math.random()}`;
+}
+
+function mergeVisitorRows(rows = []) {
+  const map = new Map();
+
+  rows.forEach((row) => {
+    const key = visitorGroupKey(row);
+    const existing = map.get(key);
+    const history = normalizeActivityHistory(row.activity_history);
+
+    if (!existing) {
+      map.set(key, {
+        ...row,
+        _merged_count: 1,
+        _all_history: history,
+        _page_views: history.filter((event) => event?.type === 'page_view').length,
+        time_spent_seconds: Number(row.time_spent_seconds) || 0,
+      });
+      return;
+    }
+
+    const currentLast = new Date(existing.last_seen || existing.created_at || 0).getTime();
+    const rowLast = new Date(row.last_seen || row.created_at || 0).getTime();
+    const newer = rowLast >= currentLast ? row : existing;
+
+    existing.visitor_id = newer.visitor_id || existing.visitor_id;
+    existing.ip_address = newer.ip_address || existing.ip_address;
+    existing.city = newer.city || existing.city;
+    existing.page_url = newer.page_url || existing.page_url;
+    existing.last_seen = newer.last_seen || existing.last_seen;
+    existing.created_at = newer.created_at || existing.created_at;
+    existing.onesignal_user_id = newer.onesignal_user_id || existing.onesignal_user_id;
+    existing._merged_count += 1;
+    existing._all_history = existing._all_history.concat(history).slice(-200);
+    existing._page_views = existing._all_history.filter((event) => event?.type === 'page_view').length;
+    existing.time_spent_seconds = Math.max(Number(existing.time_spent_seconds) || 0, Number(row.time_spent_seconds) || 0);
+  });
+
+  return Array.from(map.values()).sort((a, b) => {
+    const da = new Date(a.last_seen || a.created_at || 0).getTime();
+    const db = new Date(b.last_seen || b.created_at || 0).getTime();
+    return db - da;
+  });
+}
+
+function getDisplayVisitors() {
+  return mergeVisitorRows(state.analytics || []);
+}
+
 function fmtDate(value){ return value ? new Date(value).toLocaleString('fr-FR') : '-'; }
 function money(value){ return `${Number(value || 0).toLocaleString('fr-FR')} DH`; }
 function normalizePhone(phone = ''){
@@ -151,8 +206,9 @@ function renderStats() {
   const analytics = state.analytics || [];
   const subscribers = state.subscribers || [];
   const today = new Date().toISOString().slice(0, 10);
+  const displayVisitors = getDisplayVisitors();
 
-  const todayVisitors = analytics.filter((row) => {
+  const todayVisitors = displayVisitors.filter((row) => {
     const date = row.last_seen || row.created_at;
     return date && String(date).slice(0, 10) === today;
   }).length;
@@ -379,7 +435,7 @@ async function sendOneSignalPush({ title, message, playerIds = null, includedSeg
 
   if (!response.ok || result?.error) {
     console.error('send-push failed:', response.status, result);
-    throw new Error(result?.error || `send-push HTTP ${response.status}`);
+    throw new Error(result?.details?.error || result?.error || `send-push HTTP ${response.status}`);
   }
 
   return result;
@@ -428,21 +484,37 @@ function initTrackPushModal() {
 function renderVisitors(){
   const root = $('visitorsList');
   if(!root) return;
-  root.innerHTML = state.visitors.map(v => `
+  const visitors = getDisplayVisitors();
+  root.innerHTML = visitors.map(v => `
     <article class="visitor-card">
       <div class="card-main">
-        <div><strong>${safeText(v.ip_address || '-')}</strong><div class="meta"><span>${safeText(v.city || 'Unknown')}</span></div></div>
-        <button class="toggle-details" data-view-visitor="${safeText(v.visitor_id)}">Logs</button>
+        <div>
+          <strong>${safeText(v.ip_address || v.visitor_id || '-')}</strong>
+          <div class="meta">
+            <span>${safeText(v.city || 'Unknown')}</span>
+            <span>${Number(v._page_views || 0)} page view(s)</span>
+          </div>
+        </div>
+        <button class="toggle-details" data-view-visitor="${safeText(v.visitor_id || visitorGroupKey(v))}">Logs</button>
       </div>
     </article>
   `).join('') || '<p>Aucun visiteur.</p>';
+
   qsa('[data-view-visitor]', root).forEach(btn => btn.addEventListener('click', () => {
-    const v = state.visitors.find(x => x.visitor_id === btn.dataset.viewVisitor);
+    const key = btn.dataset.viewVisitor;
+    const v = visitors.find(x => String(x.visitor_id) === String(key) || String(visitorGroupKey(x)) === String(key));
     if(v){
       const body = $('visitorModalContent');
       if (!body) return;
-      const history = normalizeActivityHistory(v.activity_history);
-      body.innerHTML = `<p><b>Visitor:</b> ${safeText(v.visitor_id || '-')}</p><p><b>IP:</b> ${safeText(v.ip_address || '-')}</p><p><b>City:</b> ${safeText(v.city || '-')}</p><p><b>Last seen:</b> ${fmtDate(v.last_seen || v.created_at)}</p><p><b>Time:</b> ${safeText(v.time_spent_seconds || 0)}s</p>${history.length ? `<ol class="activity-list">${history.slice(-20).reverse().map(ev => `<li>${safeText(ev.type || 'event')} - ${safeText(ev.page || ev.path || '')} <small>${safeText(ev.at || ev.timestamp || '')}</small></li>`).join('')}</ol>` : ''}`;
+      const history = Array.isArray(v._all_history) ? v._all_history : normalizeActivityHistory(v.activity_history);
+      body.innerHTML = `
+        <p><b>Visitor:</b> ${safeText(v.visitor_id || '-')}</p>
+        <p><b>IP:</b> ${safeText(v.ip_address || '-')}</p>
+        <p><b>City:</b> ${safeText(v.city || '-')}</p>
+        <p><b>Page views:</b> ${Number(v._page_views || 0)}</p>
+        <p><b>Last seen:</b> ${fmtDate(v.last_seen || v.created_at)}</p>
+        <p><b>Time:</b> ${safeText(v.time_spent_seconds || 0)}s</p>
+        ${history.length ? `<ol class="activity-list">${history.slice(-30).reverse().map(ev => `<li>${safeText(ev.type || 'event')} - ${safeText(ev.page_url || ev.page || ev.path || '')} <small>${safeText(ev.at || ev.timestamp || '')}</small></li>`).join('')}</ol>` : ''}`;
       setModalOpen('visitorModal', true);
     }
   }));
@@ -530,11 +602,11 @@ function initTabs(){
 function renderAnalyticsTable() {
   const root = $('analyticsTableBody');
   if (!root) return;
-  const rows = (state.analytics || []).slice(0, 80).map((row) => {
-    const history = normalizeActivityHistory(row.activity_history);
+  const rows = getDisplayVisitors().slice(0, 80).map((row) => {
+    const history = Array.isArray(row._all_history) ? row._all_history : normalizeActivityHistory(row.activity_history);
     const lastEvent = history[history.length - 1] || {};
     return `<tr>
-      <td>${safeText(row.visitor_id || row.id || '-')}</td>
+      <td>${safeText(row.ip_address || row.visitor_id || '-')}</td>
       <td>${safeText(row.ip_address || '-')}</td>
       <td>${safeText(row.city || '-')}</td>
       <td>${safeText(lastEvent.page_url || lastEvent.page || lastEvent.path || row.page_url || '-')}</td>
@@ -542,7 +614,7 @@ function renderAnalyticsTable() {
       <td>${safeText(row.time_spent_seconds || 0)}s</td>
     </tr>`;
   }).join('');
-  root.innerHTML = rows || '<tr><td colspan="6">Aucun événement.</td></tr>';
+  root.innerHTML = rows || '<tr><td colspan="6">Aucun visiteur.</td></tr>';
 }
 
 function initEvents(){
