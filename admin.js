@@ -233,6 +233,7 @@ function renderAnalyticsChart() {
 function renderOrders() {
   const root = $('ordersList');
   if(!root) return;
+
   root.innerHTML = state.orders.map(order => `
     <article class="order-card" data-id="${safeText(order.id)}">
       <div class="card-main">
@@ -241,39 +242,37 @@ function renderOrders() {
           <div class="meta"><span>${safeText(order.city || '-')}</span></div>
         </div>
         <div>
-          ${String(order.status || '').toLowerCase() === 'shipped' && order.onesignal_user_id ? `
-            <button class="confirm" type="button" data-open-track-push="${safeText(order.id)}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 8px;">
-              🚚 إشعار التوصيل
-            </button>
-          ` : ''}
           <button class="toggle-details" data-view-order="${safeText(order.id)}">Voir les détails</button>
         </div>
       </div>
     </article>
   `).join('') || '<p>Aucune commande.</p>';
 
-  qsa('[data-view-order]', root).forEach(btn => btn.addEventListener('click', () => openOrderModal(btn.dataset.viewOrder)));
-  
-  document.querySelectorAll('[data-open-track-push]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const orderId = button.getAttribute('data-open-track-push');
-      const order = (state.orders || []).find((item) => String(item.id) === String(orderId));
-      if (!order) return;
-      openTrackModal(order);
-    });
+  qsa('[data-view-order]', root).forEach(btn => {
+    btn.addEventListener('click', () => openOrderModal(btn.dataset.viewOrder));
   });
 }
 
+function canSendTrackingPush(order) {
+  const status = String(order?.status || '').toLowerCase();
+  return Boolean(order?.onesignal_user_id && (status === 'shipped' || status === 'delivered'));
+}
+
 function openOrderModal(orderId){
-  const order = state.orders.find(o => o.id === orderId);
+  const order = state.orders.find(o => String(o.id) === String(orderId));
   if(!order || !$('orderModal')) return;
+
   const imageUrl = getOrderImage(order);
   const phone = normalizePhone(order.phone);
   const text = encodeURIComponent(`سلام ${order.customer_name || ''}، بغينا نأكدو الطلب ديالك من Soumi Crochet: ${order.product_name || ''} بثمن ${order.price || ''} DH.`);
   const waHref = phone ? `https://wa.me/${phone}?text=${text}` : '#';
-  
+  const trackingButton = canSendTrackingPush(order)
+    ? `<button type="button" class="approve" data-open-track-push-modal="${safeText(order.id)}">🚚 إشعار التوصيل</button>`
+    : '';
+
   const body = $('orderModalContent');
   if (!body) return;
+
   body.innerHTML = `
     ${imageUrl ? `<img src="${safeText(imageUrl)}" alt="Product" style="max-width:100%; height:200px; object-fit:cover; border-radius:12px; margin-bottom:15px;">` : ''}
     <p><b>Customer:</b> ${safeText(order.customer_name)}</p>
@@ -282,27 +281,47 @@ function openOrderModal(orderId){
     <p><b>Address:</b> ${safeText(order.address)}</p>
     <p><b>Product:</b> ${safeText(order.product_name)}</p>
     <p><b>Price:</b> ${money(order.price)}</p>
-    <p><b>Status:</b> 
-      <select id="statusSelect-${safeText(order.id)}" style="padding: 4px; border-radius: 6px;">
-        ${['pending','confirmed','processing','shipped','delivered','cancelled'].map(s => `<option value="${s}" ${order.status===s?'selected':''}>${s}</option>`).join('')}
+    <p><b>Status:</b>
+      <select id="statusSelect-${safeText(order.id)}" class="status-select">
+        ${['pending','confirmed','processing','shipped','delivered','cancelled'].map(s => `<option value="${s}" ${String(order.status)===s?'selected':''}>${s}</option>`).join('')}
       </select>
     </p>
     <p><b>Date:</b> ${fmtDate(order.created_at)}</p>
     <div class="actions" style="margin-top:15px;">
       <a href="${waHref}" target="_blank" rel="noopener">Confirm & WhatsApp</a>
+      ${trackingButton}
       <button type="button" class="delete" data-delete-order-modal="${safeText(order.id)}">Delete</button>
     </div>
   `;
+
   setModalOpen('orderModal', true);
 
   $(`statusSelect-${order.id}`)?.addEventListener('change', async (e) => {
-    await client.from('orders').update({ status: e.target.value }).eq('id', order.id);
+    const nextStatus = e.target.value;
+    const { error } = await client.from('orders').update({ status: nextStatus }).eq('id', order.id);
+
+    if (error) {
+      alert(error.message || 'Erreur status');
+      return;
+    }
+
+    order.status = nextStatus;
+    const idx = state.orders.findIndex(item => String(item.id) === String(order.id));
+    if (idx >= 0) state.orders[idx].status = nextStatus;
+
     await loadAll();
+    openOrderModal(order.id);
+  });
+
+  body.querySelector('[data-open-track-push-modal]')?.addEventListener('click', () => {
+    setModalOpen('orderModal', false);
+    openTrackModal(order);
   });
 
   body.querySelector('[data-delete-order-modal]')?.addEventListener('click', async () => {
     if(confirm('Supprimer cette commande ?')){
-      await client.from('orders').delete().eq('id', order.id);
+      const { error } = await client.from('orders').delete().eq('id', order.id);
+      if (error) alert(error.message || 'Erreur suppression');
       setModalOpen('orderModal', false);
       await loadAll();
     }
@@ -346,11 +365,26 @@ async function sendOneSignalPush({ title, message, playerIds = null, includedSeg
     data
   };
 
-  const { data: result, error } = await client.functions.invoke('send-push', { body });
-  if (error) throw error;
-  if (result?.error) throw new Error(result.error);
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'apikey': SUPABASE_ANON_KEY
+    },
+    body: JSON.stringify(body)
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok || result?.error) {
+    console.error('send-push failed:', response.status, result);
+    throw new Error(result?.error || `send-push HTTP ${response.status}`);
+  }
+
   return result;
 }
+
 function initTrackPushModal() {
   document.querySelectorAll('[data-close-track-modal]').forEach((button) => {
     button.addEventListener('click', closeTrackModal);
@@ -503,7 +537,7 @@ function renderAnalyticsTable() {
       <td>${safeText(row.visitor_id || row.id || '-')}</td>
       <td>${safeText(row.ip_address || '-')}</td>
       <td>${safeText(row.city || '-')}</td>
-      <td>${safeText(lastEvent.page || lastEvent.path || row.current_page || '-')}</td>
+      <td>${safeText(lastEvent.page_url || lastEvent.page || lastEvent.path || row.page_url || '-')}</td>
       <td>${fmtDate(row.last_seen || row.created_at)}</td>
       <td>${safeText(row.time_spent_seconds || 0)}s</td>
     </tr>`;
