@@ -39,6 +39,84 @@ function deliveredRevenue(orders = []) {
   }, 0);
 }
 
+function visitorGroupKey(row = {}) {
+  return row.onesignal_user_id || row.ip_address || row.visitor_id || row.id || 'unknown';
+}
+
+function uniqueVisitorsToday(analyticsRows = []) {
+  const today = new Date().toISOString().slice(0, 10);
+  const keys = new Set();
+  analyticsRows.forEach((row) => {
+    const date = row.last_seen || row.created_at;
+    if (!date || String(date).slice(0, 10) !== today) return;
+    keys.add(visitorGroupKey(row));
+  });
+  return keys.size;
+}
+
+function getGroupedVisitors() {
+  const map = new Map();
+  (state.analytics || []).forEach((row) => {
+    const key = visitorGroupKey(row);
+    const history = normalizeActivityHistory(row.activity_history);
+    const old = map.get(key);
+    if (!old) {
+      map.set(key, {
+        key,
+        ip_address: row.ip_address || '-',
+        city: row.city || '-',
+        visitor_ids: row.visitor_id ? [row.visitor_id] : [],
+        last_seen: row.last_seen || row.created_at,
+        time_spent_seconds: Number(row.time_spent_seconds) || 0,
+        activity_history: [...history],
+        page_views: history.filter((ev) => ev?.type === 'page_view').length,
+        raw_rows: [row]
+      });
+      return;
+    }
+    if (row.visitor_id && !old.visitor_ids.includes(row.visitor_id)) old.visitor_ids.push(row.visitor_id);
+    old.activity_history.push(...history);
+    old.page_views += history.filter((ev) => ev?.type === 'page_view').length;
+    old.time_spent_seconds = Math.max(old.time_spent_seconds, Number(row.time_spent_seconds) || 0);
+    if (new Date(row.last_seen || row.created_at || 0) > new Date(old.last_seen || 0)) {
+      old.last_seen = row.last_seen || row.created_at;
+      old.ip_address = row.ip_address || old.ip_address;
+      old.city = row.city || old.city;
+    }
+    old.raw_rows.push(row);
+  });
+  return Array.from(map.values()).sort((a, b) => new Date(b.last_seen || 0) - new Date(a.last_seen || 0));
+}
+
+function getLatestActivityEvents(limit = 80) {
+  const events = [];
+  (state.analytics || []).forEach((row) => {
+    const history = normalizeActivityHistory(row.activity_history);
+    history.forEach((ev) => {
+      events.push({
+        ...ev,
+        ip_address: row.ip_address || '-',
+        city: row.city || '-',
+        visitor_id: row.visitor_id || '-',
+        last_seen: row.last_seen || row.created_at,
+        time_spent_seconds: row.time_spent_seconds || 0
+      });
+    });
+  });
+  return events
+    .sort((a, b) => new Date(b.at || b.timestamp || b.last_seen || 0) - new Date(a.at || a.timestamp || a.last_seen || 0))
+    .slice(0, limit);
+}
+
+function formatActivityLabel(ev = {}) {
+  const type = ev.type || 'event';
+  if (type === 'page_view') return '👁️ Page view';
+  if (type === 'product_view') return `👜 Produit: ${ev.product_name || ev.product_id || '-'}`;
+  if (type === 'push_subscribe') return '🔔 Notifications activées';
+  if (type === 'order_submit') return '✅ Commande envoyée';
+  return safeText(type);
+}
+
 function fmtDate(value){ return value ? new Date(value).toLocaleString('fr-FR') : '-'; }
 function money(value){ return `${Number(value || 0).toLocaleString('fr-FR')} DH`; }
 function normalizePhone(phone = ''){
@@ -150,12 +228,7 @@ function renderStats() {
   const reviews = state.reviews || [];
   const analytics = state.analytics || [];
   const subscribers = state.subscribers || [];
-  const today = new Date().toISOString().slice(0, 10);
-
-  const todayVisitors = analytics.filter((row) => {
-    const date = row.last_seen || row.created_at;
-    return date && String(date).slice(0, 10) === today;
-  }).length;
+  const todayVisitors = uniqueVisitorsToday(analytics);
 
   const totalRevenue = deliveredRevenue(orders);
   const totalPageViews = countPageViews(analytics);
@@ -379,7 +452,7 @@ async function sendOneSignalPush({ title, message, playerIds = null, includedSeg
 
   if (!response.ok || result?.error) {
     console.error('send-push failed:', response.status, result);
-    throw new Error(result?.error || `send-push HTTP ${response.status}`);
+    throw new Error(result?.details?.errors?.[0] || result?.details?.errors || result?.error || `send-push HTTP ${response.status}`);
   }
 
   return result;
@@ -417,7 +490,7 @@ function initTrackPushModal() {
       setTimeout(() => { closeTrackModal(); loadAll(); }, 1200);
     } catch (error) {
       console.error(error);
-      if (status) status.textContent = 'Erreur pendant l’envoi.';
+      if (status) status.textContent = `Erreur pendant l’envoi: ${error.message || error}`;
     } finally {
       if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalText; }
     }
@@ -428,23 +501,37 @@ function initTrackPushModal() {
 function renderVisitors(){
   const root = $('visitorsList');
   if(!root) return;
-  root.innerHTML = state.visitors.map(v => `
+  const visitors = getGroupedVisitors();
+  root.innerHTML = visitors.map(v => `
     <article class="visitor-card">
       <div class="card-main">
-        <div><strong>${safeText(v.ip_address || '-')}</strong><div class="meta"><span>${safeText(v.city || 'Unknown')}</span></div></div>
-        <button class="toggle-details" data-view-visitor="${safeText(v.visitor_id)}">Logs</button>
+        <div>
+          <strong>${safeText(v.ip_address || '-')}</strong>
+          <div class="meta">
+            <span>${safeText(v.city || 'Unknown')}</span>
+            <span>${safeText(v.page_views || 0)} page view(s)</span>
+          </div>
+        </div>
+        <button class="toggle-details" data-view-visitor="${safeText(v.key)}">Logs</button>
       </div>
     </article>
   `).join('') || '<p>Aucun visiteur.</p>';
+
   qsa('[data-view-visitor]', root).forEach(btn => btn.addEventListener('click', () => {
-    const v = state.visitors.find(x => x.visitor_id === btn.dataset.viewVisitor);
-    if(v){
-      const body = $('visitorModalContent');
-      if (!body) return;
-      const history = normalizeActivityHistory(v.activity_history);
-      body.innerHTML = `<p><b>Visitor:</b> ${safeText(v.visitor_id || '-')}</p><p><b>IP:</b> ${safeText(v.ip_address || '-')}</p><p><b>City:</b> ${safeText(v.city || '-')}</p><p><b>Last seen:</b> ${fmtDate(v.last_seen || v.created_at)}</p><p><b>Time:</b> ${safeText(v.time_spent_seconds || 0)}s</p>${history.length ? `<ol class="activity-list">${history.slice(-20).reverse().map(ev => `<li>${safeText(ev.type || 'event')} - ${safeText(ev.page || ev.path || '')} <small>${safeText(ev.at || ev.timestamp || '')}</small></li>`).join('')}</ol>` : ''}`;
-      setModalOpen('visitorModal', true);
-    }
+    const v = visitors.find(x => String(x.key) === String(btn.dataset.viewVisitor));
+    if(!v) return;
+    const body = $('visitorModalContent');
+    if (!body) return;
+    const history = (v.activity_history || []).slice(-30).reverse();
+    body.innerHTML = `
+      <p><b>IP:</b> ${safeText(v.ip_address || '-')}</p>
+      <p><b>City:</b> ${safeText(v.city || '-')}</p>
+      <p><b>Page views:</b> ${safeText(v.page_views || 0)}</p>
+      <p><b>Last seen:</b> ${fmtDate(v.last_seen)}</p>
+      <p><b>Time:</b> ${safeText(v.time_spent_seconds || 0)}s</p>
+      ${history.length ? `<ol class="activity-list">${history.map(ev => `<li>${formatActivityLabel(ev)} <small>${safeText(ev.page_url || ev.page || ev.path || '')} · ${safeText(ev.at || ev.timestamp || '')}</small></li>`).join('')}</ol>` : '<p class="muted">Aucun historique.</p>'}
+    `;
+    setModalOpen('visitorModal', true);
   }));
 }
 
@@ -530,16 +617,15 @@ function initTabs(){
 function renderAnalyticsTable() {
   const root = $('analyticsTableBody');
   if (!root) return;
-  const rows = (state.analytics || []).slice(0, 80).map((row) => {
-    const history = normalizeActivityHistory(row.activity_history);
-    const lastEvent = history[history.length - 1] || {};
+  const events = getLatestActivityEvents(80);
+  const rows = events.map((ev) => {
     return `<tr>
-      <td>${safeText(row.visitor_id || row.id || '-')}</td>
-      <td>${safeText(row.ip_address || '-')}</td>
-      <td>${safeText(row.city || '-')}</td>
-      <td>${safeText(lastEvent.page_url || lastEvent.page || lastEvent.path || row.page_url || '-')}</td>
-      <td>${fmtDate(row.last_seen || row.created_at)}</td>
-      <td>${safeText(row.time_spent_seconds || 0)}s</td>
+      <td>${formatActivityLabel(ev)}</td>
+      <td>${safeText(ev.ip_address || '-')}</td>
+      <td>${safeText(ev.city || '-')}</td>
+      <td>${safeText(ev.page_url || ev.page || ev.path || '-')}</td>
+      <td>${fmtDate(ev.at || ev.timestamp || ev.last_seen)}</td>
+      <td>${safeText(ev.time_spent_seconds || 0)}s</td>
     </tr>`;
   }).join('');
   root.innerHTML = rows || '<tr><td colspan="6">Aucun événement.</td></tr>';
@@ -612,7 +698,7 @@ function initEvents(){
       await loadAll();
     } catch(err) {
       console.error(err);
-      if (status) status.textContent = 'Erreur Push. Vérifiez la clé OneSignal et la console.';
+      if (status) status.textContent = `Erreur Push: ${err.message || err}`;
       else alert('Erreur Push');
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = originalText || 'Envoyer notification'; }
