@@ -1054,3 +1054,45 @@ a {
     width: 100%;
   }
 }
+
+/* =========================
+   Analytics Stats Carousel
+   تظهر stats غير داخل Analytics tab ككاروسيل أفقي
+========================= */
+.analytics-stats-carousel {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 4px 2px 18px;
+  margin-bottom: 16px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.analytics-stats-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.analytics-stats-carousel .stat-card {
+  flex: 0 0 220px;
+  scroll-snap-align: start;
+  min-height: 112px;
+}
+
+@media (min-width: 1100px) {
+  .analytics-stats-carousel .stat-card {
+    flex-basis: 230px;
+  }
+}
+
+@media (max-width: 620px) {
+  .analytics-stats-carousel {
+    margin-inline: -2px;
+    padding-bottom: 14px;
+  }
+
+  .analytics-stats-carousel .stat-card {
+    flex: 0 0 78%;
+  }
+}

@@ -27,12 +27,8 @@
       await OneSignal.init({
         appId: "7e6b1cf8-6a2f-44ad-ada2-f623c8046d81",
         safari_web_id: "web.onesignal.auto.40adfb09-7751-41be-9e4d-5711eb8f35a8",
-        serviceWorkerPath: "OneSignalSDKWorker.js",
-        serviceWorkerParam: { scope: "/" },
         notifyButton: {
-          enable: true,
-          position: "bottom-right",
-          showCredit: false
+          enable: false
         }
       });
     });
@@ -109,8 +105,7 @@
           </button>
         </div>
       </header>
-
-      <section class="stats-grid">
+        <div class="analytics-stats-carousel" id="analyticsStatsCarousel">
         <article class="stat-card">
           <span>Total Orders</span>
           <strong id="statOrders">0</strong>
@@ -140,7 +135,7 @@
           <span>Subscribers</span>
           <strong id="statSubscribers">0</strong>
         </article>
-      </section>
+        </div>
 
       <section class="tab-panel active" id="tab-analytics">
         <div class="panel-card">
@@ -315,28 +310,6 @@
                 placeholder="Votre message..."
                 required
               ></textarea>
-            </label>
-
-
-
-            <label>
-              <span>CTA Link</span>
-              <input
-                type="url"
-                id="notificationUrl"
-                name="url"
-                placeholder="https://soumicrochet.store/"
-              />
-            </label>
-
-            <label>
-              <span>CTA Button Text</span>
-              <input
-                type="text"
-                id="notificationButtonText"
-                name="button_text"
-                placeholder="اطلب الآن"
-              />
             </label>
 
             <div class="segment-box">
